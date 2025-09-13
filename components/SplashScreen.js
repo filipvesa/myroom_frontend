@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 
-const SplashScreen = ({ onContinue }) => {
+const SplashScreen = ({ navigation }) => {
   return (
     <ImageBackground
       // This path assumes your assets folder is in the root directory
@@ -16,13 +16,18 @@ const SplashScreen = ({ onContinue }) => {
       resizeMode="cover" // This ensures the image covers the whole screen
     >
       <View style={styles.textContainer}>
-        <Text style={styles.title}>Welcome to MyRoom</Text>
+        <Text style={styles.title} adjustsFontSizeToFit numberOfLines={1}>
+          Welcome to MyRoom
+        </Text>
         <Text style={styles.subtitle}>Capture and organize your memories</Text>
       </View>
 
       {/* This button will only appear in development mode */}
       {__DEV__ && (
-        <TouchableOpacity style={styles.devButton} onPress={onContinue}>
+        <TouchableOpacity
+          style={styles.devButton}
+          onPress={() => navigation.replace('Main')}
+        >
           <Text style={styles.devButtonText}>Continue (Dev)</Text>
         </TouchableOpacity>
       )}
@@ -39,9 +44,10 @@ const styles = StyleSheet.create({
   },
   textContainer: {
     alignItems: 'center', // Center the text items within their container
+    width: '90%', // Ensures there is space on the sides
   },
   title: {
-    fontSize: 36,
+    fontSize: 38,
     color: '#362419', // A dark brown, almost black color
     fontWeight: 'bold',
   },

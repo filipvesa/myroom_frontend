@@ -7,7 +7,6 @@ import {
   Text,
 } from 'react-native';
 
-const MainScreen = () => {
 const MainScreen = ({ navigation }) => {
   return (
     <ImageBackground
