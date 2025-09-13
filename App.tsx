@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { NewAppScreen } from '@react-native/new-app-screen';
 import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import SplashScreen from './components/SplashScreen';
+import MainScreen from './components/MainScreen';
 
 function App() {
   // The splash screen is now visible until you manually hide it.
@@ -12,7 +12,11 @@ function App() {
   return (
     <SafeAreaProvider>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      {isSplashVisible ? <SplashScreen /> : <AppContent />}
+      {isSplashVisible ? (
+        <SplashScreen onContinue={() => setSplashVisible(false)} />
+      ) : (
+        <AppContent />
+      )}
     </SafeAreaProvider>
   );
 }
@@ -22,8 +26,7 @@ function App() {
 function AppContent() {
   return (
     <View style={styles.container}>
-      {/* You can replace NewAppScreen with your own main screen component */}
-      <NewAppScreen />
+      <MainScreen />
     </View>
   );
 }
