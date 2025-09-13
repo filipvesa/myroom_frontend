@@ -56,7 +56,7 @@ const MainScreen = ({ navigation }) => {
             },
           ]}
           // To navigate, you would use: onPress={() => navigation.navigate('GalleryScreen')}
-          onPress={() => alert('Camera Shelf Tapped!')}
+          onPress={() => navigation.navigate('Gallery')}
         >
           {({ pressed }) => (
             <Text
