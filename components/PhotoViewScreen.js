@@ -46,7 +46,17 @@ const PhotoViewScreen = ({ route, navigation }) => {
       scale.value = savedScale.value * e.scale;
     })
     .onEnd(() => {
-      savedScale.value = scale.value;
+      if (scale.value < 1) {
+        // Animate back to center and 1x scale
+        scale.value = withTiming(1);
+        savedScale.value = 1;
+        translateX.value = withTiming(0);
+        translateY.value = withTiming(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      } else {
+        savedScale.value = scale.value;
+      }
     });
 
   const panGesture = Gesture.Pan()

@@ -189,7 +189,10 @@ const GalleryScreen = ({ navigation }) => {
                 }
               }}
             >
-              <SharedElement id={`photo.${item.node.image.uri}`}>
+              <SharedElement
+                id={`photo.${item.node.image.uri}`}
+                style={{ flex: 1 }}
+              >
                 <Image
                   style={styles.image}
                   source={{ uri: item.node.image.uri }}
@@ -264,7 +267,7 @@ const styles = StyleSheet.create({
   image: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#E8E0D4',
+    borderColor: '#fff',
   },
   videoIconContainer: {
     position: 'absolute',
