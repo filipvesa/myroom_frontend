@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Text,
   StatusBar,
+  useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Orientation from 'react-native-orientation-locker';
@@ -21,6 +22,7 @@ const AnimatedImage = Animated.createAnimatedComponent(Image);
 
 const PhotoViewScreen = ({ route, navigation }) => {
   const { photoUri } = route.params;
+  const { width, height } = useWindowDimensions();
 
   useFocusEffect(
     React.useCallback(() => {
@@ -56,14 +58,29 @@ const PhotoViewScreen = ({ route, navigation }) => {
         savedTranslateY.value = 0;
       } else {
         savedScale.value = scale.value;
+        // After zooming, clamp the translation to the new boundaries
+        const maxTx = (width * scale.value - width) / 2;
+        const maxTy = (height * scale.value - height) / 2;
+        translateX.value = Math.max(-maxTx, Math.min(translateX.value, maxTx));
+        translateY.value = Math.max(-maxTy, Math.min(translateY.value, maxTy));
+        // Save the clamped values
+        savedTranslateX.value = translateX.value;
+        savedTranslateY.value = translateY.value;
       }
     });
 
   const panGesture = Gesture.Pan()
     .onUpdate(e => {
       if (scale.value > 1) {
-        translateX.value = savedTranslateX.value + e.translationX;
-        translateY.value = savedTranslateY.value + e.translationY;
+        const maxTx = (width * (scale.value - 1)) / 2;
+        const maxTy = (height * (scale.value - 1)) / 2;
+
+        const newX = savedTranslateX.value + e.translationX;
+        const newY = savedTranslateY.value + e.translationY;
+
+        // Clamp the translation values to the boundaries
+        translateX.value = Math.max(-maxTx, Math.min(newX, maxTx));
+        translateY.value = Math.max(-maxTy, Math.min(newY, maxTy));
       }
     })
     .onEnd(() => {

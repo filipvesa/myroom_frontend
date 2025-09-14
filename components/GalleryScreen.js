@@ -14,8 +14,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import { SharedElement } from 'react-navigation-shared-element';
 import {
-  User,
-  Image as ImageIcon,
+  Images,
+  Archive,
   Camera,
   Wrench,
   Lock,
@@ -42,8 +42,8 @@ const Header = ({ navigation }) => (
 
 const BottomNavigation = ({ activeTab, onTabPress }) => {
   const tabs = [
-    { id: 'photos', icon: User, label: 'Photos' },
-    { id: 'gallery', icon: ImageIcon, label: 'Gallery' },
+    { id: 'photos', icon: Images, label: 'Local' },
+    { id: 'gallery', icon: Archive, label: 'Storage' },
     { id: 'camera', icon: Camera, label: 'Camera', isMain: true },
     { id: 'tools', icon: Wrench, label: 'Tools' },
     { id: 'lock', icon: Lock, label: 'Lock' },
@@ -170,48 +170,57 @@ const GalleryScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <Header navigation={navigation} />
-      <FlatList
-        data={media}
-        numColumns={3}
-        keyExtractor={item => item.node.image.uri}
-        renderItem={({ item }) => {
-          const isVideo = item.node.type.startsWith('video');
-          return (
-            <TouchableOpacity
-              style={styles.imageTouchable}
-              onPress={() => {
-                if (!isVideo) {
-                  navigation.navigate('PhotoView', {
-                    photoUri: item.node.image.uri,
-                  });
-                } else {
-                  alert('Video player not implemented yet!');
-                }
-              }}
-            >
-              <SharedElement
-                id={`photo.${item.node.image.uri}`}
-                style={{ flex: 1 }}
+      {activeTab === 'photos' ? (
+        <FlatList
+          data={media}
+          numColumns={3}
+          keyExtractor={item => item.node.image.uri}
+          renderItem={({ item }) => {
+            const isVideo = item.node.type.startsWith('video');
+            return (
+              <TouchableOpacity
+                style={styles.imageTouchable}
+                onPress={() => {
+                  if (!isVideo) {
+                    navigation.navigate('PhotoView', {
+                      photoUri: item.node.image.uri,
+                    });
+                  } else {
+                    alert('Video player not implemented yet!');
+                    navigation.navigate('VideoPlayer', {
+                      videoUri: item.node.image.uri,
+                    });
+                  }
+                }}
               >
-                <Image
-                  style={styles.image}
-                  source={{ uri: item.node.image.uri }}
-                />
-              </SharedElement>
-              {isVideo && (
-                <View style={styles.videoIconContainer}>
-                  <Play color="white" size={24} />
-                </View>
-              )}
-            </TouchableOpacity>
-          );
-        }}
-        onEndReached={loadMoreMedia}
-        onEndReachedThreshold={0.5}
-        ListFooterComponent={
-          loadingMore && <ActivityIndicator color="#362419" />
-        }
-      />
+                <SharedElement
+                  id={`photo.${item.node.image.uri}`}
+                  style={{ flex: 1 }}
+                >
+                  <Image
+                    style={styles.image}
+                    source={{ uri: item.node.image.uri }}
+                  />
+                </SharedElement>
+                {isVideo && (
+                  <View style={styles.videoIconContainer}>
+                    <Play color="white" size={24} />
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          }}
+          onEndReached={loadMoreMedia}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            loadingMore && <ActivityIndicator color="#362419" />
+          }
+        />
+      ) : (
+        <View style={styles.placeholderContainer}>
+          <Text style={styles.placeholderText}>Cloud Storage Coming Soon</Text>
+        </View>
+      )}
       <BottomNavigation activeTab={activeTab} onTabPress={setActiveTab} />
     </SafeAreaView>
   );
@@ -259,6 +268,17 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 12,
     fontWeight: '500',
+  },
+  placeholderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placeholderText: {
+    fontSize: 18,
+    color: '#362419',
+    fontWeight: '500',
+    opacity: 0.7,
   },
   imageTouchable: {
     flex: 1 / 3,
