@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   ImageBackground,
   StyleSheet,
@@ -8,6 +8,16 @@ import {
 } from 'react-native';
 
 const SplashScreen = ({ navigation }) => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      // Automatically navigate to the Main screen after 3 seconds
+      navigation.replace('Main');
+    }, 3000);
+
+    // Clear the timer if the component unmounts (e.g., if the dev button is pressed)
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <ImageBackground
       // This path assumes your assets folder is in the root directory
