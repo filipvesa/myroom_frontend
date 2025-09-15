@@ -9,6 +9,7 @@ import {
   Platform,
   PermissionsAndroid,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
@@ -42,8 +43,8 @@ const Header = ({ navigation }) => (
 
 const BottomNavigation = ({ activeTab, onTabPress }) => {
   const tabs = [
-    { id: 'photos', icon: Images, label: 'Local' },
-    { id: 'gallery', icon: Archive, label: 'Storage' },
+    { id: 'local', icon: Images, label: 'Local' },
+    { id: 'storage', icon: Archive, label: 'Storage' },
     { id: 'camera', icon: Camera, label: 'Camera', isMain: true },
     { id: 'tools', icon: Wrench, label: 'Tools' },
     { id: 'lock', icon: Lock, label: 'Lock' },
@@ -87,7 +88,7 @@ const BottomNavigation = ({ activeTab, onTabPress }) => {
 };
 
 const GalleryScreen = ({ navigation }) => {
-  const [activeTab, setActiveTab] = useState('photos');
+  const [activeTab, setActiveTab] = useState('local');
   const [media, setMedia] = useState([]);
   const [pageInfo, setPageInfo] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -170,7 +171,7 @@ const GalleryScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <Header navigation={navigation} />
-      {activeTab === 'photos' ? (
+      {activeTab === 'local' ? (
         <FlatList
           data={media}
           numColumns={3}
@@ -187,10 +188,10 @@ const GalleryScreen = ({ navigation }) => {
                       photoUri: item.node.image.uri,
                     });
                   } else {
-                    alert('Video player not implemented yet!');
-                    navigation.navigate('VideoPlayer', {
-                      videoUri: item.node.image.uri,
-                    });
+                    // Open the video using the device's default player
+                    Linking.openURL(item.node.image.uri).catch(err =>
+                      console.error('Failed to open video URL:', err),
+                    );
                   }
                 }}
               >
@@ -297,8 +298,8 @@ const styles = StyleSheet.create({
   },
   videoIconContainer: {
     position: 'absolute',
-    bottom: 5,
-    right: 5,
+    bottom: 15, // Increased to account for the parent's padding
+    right: 15, // Increased to account for the parent's padding
     backgroundColor: 'rgba(0,0,0,0.5)',
     borderRadius: 15,
     width: 30,
