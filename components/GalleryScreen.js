@@ -174,6 +174,7 @@ const GalleryScreen = ({ navigation }) => {
         <FlatList
           data={media}
           numColumns={3}
+          contentContainerStyle={styles.listContentContainer}
           keyExtractor={item => item.node.image.uri}
           renderItem={({ item }) => {
             const isVideo = item.node.type.startsWith('video');
@@ -283,11 +284,16 @@ const styles = StyleSheet.create({
   imageTouchable: {
     flex: 1 / 3,
     aspectRatio: 1,
+    padding: 10, // Creates space inside each touchable cell
   },
   image: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#fff',
+    borderRadius: 8,
+  },
+  listContentContainer: {
+    // Adds padding to the outside of the entire list.
+    // The combination with item padding creates uniform gaps.
+    padding: 3,
   },
   videoIconContainer: {
     position: 'absolute',
