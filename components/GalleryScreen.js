@@ -21,6 +21,7 @@ import {
   Wrench,
   Lock,
   Play,
+  Check,
 } from 'lucide-react-native';
 
 const Header = ({ navigation }) => (
@@ -37,6 +38,20 @@ const Header = ({ navigation }) => (
         <Text style={styles.proBadgeText}>PRO</Text>
       </View>
     </View>
+    <View style={{ width: 40 }} />
+  </View>
+);
+
+const SelectionHeader = ({ onCancel, selectedCount }) => (
+  <View style={styles.header}>
+    <TouchableOpacity style={styles.headerButton} onPress={onCancel}>
+      {/* Using a multiplication sign for a cleaner 'X' */}
+      <Text style={styles.headerButtonText}>✕</Text>
+    </TouchableOpacity>
+    <View style={styles.headerTitleContainer}>
+      <Text style={styles.headerTitle}>{selectedCount} selected</Text>
+    </View>
+    {/* Placeholder for future action buttons like 'Move' */}
     <View style={{ width: 40 }} />
   </View>
 );
@@ -92,6 +107,8 @@ const GalleryScreen = ({ navigation }) => {
   const [media, setMedia] = useState([]);
   const [pageInfo, setPageInfo] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedItems, setSelectedItems] = useState([]);
 
   async function hasAndroidPermission() {
     const getCheckPermissionPromise = () => {
@@ -168,9 +185,55 @@ const GalleryScreen = ({ navigation }) => {
     }
   };
 
+  const handleLongPress = item => {
+    // Don't do anything if already in selection mode on long press
+    if (isSelectionMode) return;
+
+    setIsSelectionMode(true);
+    setSelectedItems([item.node.image.uri]);
+  };
+
+  const handlePress = item => {
+    const uri = item.node.image.uri;
+    if (isSelectionMode) {
+      const newSelectedItems = selectedItems.includes(uri)
+        ? selectedItems.filter(i => i !== uri)
+        : [...selectedItems, uri];
+
+      if (newSelectedItems.length === 0) {
+        setIsSelectionMode(false);
+      }
+      setSelectedItems(newSelectedItems);
+    } else {
+      // Default behavior: view photo or play video
+      const isVideo = item.node.type.startsWith('video');
+      if (!isVideo) {
+        navigation.navigate('PhotoView', {
+          photoUri: uri,
+        });
+      } else {
+        Linking.openURL(uri).catch(err =>
+          console.error('Failed to open video URL:', err),
+        );
+      }
+    }
+  };
+
+  const cancelSelection = () => {
+    setIsSelectionMode(false);
+    setSelectedItems([]);
+  };
+
   return (
     <SafeAreaView style={styles.container}>
-      <Header navigation={navigation} />
+      {isSelectionMode ? (
+        <SelectionHeader
+          onCancel={cancelSelection}
+          selectedCount={selectedItems.length}
+        />
+      ) : (
+        <Header navigation={navigation} />
+      )}
       {activeTab === 'local' ? (
         <FlatList
           data={media}
@@ -179,31 +242,25 @@ const GalleryScreen = ({ navigation }) => {
           keyExtractor={item => item.node.image.uri}
           renderItem={({ item }) => {
             const isVideo = item.node.type.startsWith('video');
+            const uri = item.node.image.uri;
+            const isSelected = selectedItems.includes(uri);
             return (
               <TouchableOpacity
                 style={styles.imageTouchable}
-                onPress={() => {
-                  if (!isVideo) {
-                    navigation.navigate('PhotoView', {
-                      photoUri: item.node.image.uri,
-                    });
-                  } else {
-                    // Open the video using the device's default player
-                    Linking.openURL(item.node.image.uri).catch(err =>
-                      console.error('Failed to open video URL:', err),
-                    );
-                  }
-                }}
+                onPress={() => handlePress(item)}
+                onLongPress={() => handleLongPress(item)}
               >
                 <SharedElement
                   id={`photo.${item.node.image.uri}`}
                   style={{ flex: 1 }}
                 >
-                  <Image
-                    style={styles.image}
-                    source={{ uri: item.node.image.uri }}
-                  />
+                  <Image style={styles.image} source={{ uri: uri }} />
                 </SharedElement>
+                {isSelected && (
+                  <View style={styles.selectionOverlay}>
+                    <Check color="white" size={24} />
+                  </View>
+                )}
                 {isVideo && (
                   <View style={styles.videoIconContainer}>
                     <Play color="white" size={24} />
@@ -223,7 +280,9 @@ const GalleryScreen = ({ navigation }) => {
           <Text style={styles.placeholderText}>Cloud Storage Coming Soon</Text>
         </View>
       )}
-      <BottomNavigation activeTab={activeTab} onTabPress={setActiveTab} />
+      {!isSelectionMode && (
+        <BottomNavigation activeTab={activeTab} onTabPress={setActiveTab} />
+      )}
     </SafeAreaView>
   );
 };
@@ -304,6 +363,17 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     width: 30,
     height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  selectionOverlay: {
+    position: 'absolute',
+    top: 15,
+    right: 15,
+    width: 30,
+    height: 30,
+    backgroundColor: 'rgba(0, 122, 255, 0.7)',
+    borderRadius: 15,
     justifyContent: 'center',
     alignItems: 'center',
   },
