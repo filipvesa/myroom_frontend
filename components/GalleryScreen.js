@@ -9,6 +9,7 @@ import {
   Platform,
   PermissionsAndroid,
   ActivityIndicator,
+  Alert,
   Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,6 +23,7 @@ import {
   Lock,
   Play,
   Check,
+  CloudUpload,
 } from 'lucide-react-native';
 
 const Header = ({ navigation }) => (
@@ -42,7 +44,12 @@ const Header = ({ navigation }) => (
   </View>
 );
 
-const SelectionHeader = ({ onCancel, selectedCount }) => (
+const SelectionHeader = ({
+  onCancel,
+  selectedCount,
+  onUpload,
+  isUploading,
+}) => (
   <View style={styles.header}>
     <TouchableOpacity style={styles.headerButton} onPress={onCancel}>
       {/* Using a multiplication sign for a cleaner 'X' */}
@@ -51,8 +58,21 @@ const SelectionHeader = ({ onCancel, selectedCount }) => (
     <View style={styles.headerTitleContainer}>
       <Text style={styles.headerTitle}>{selectedCount} selected</Text>
     </View>
-    {/* Placeholder for future action buttons like 'Move' */}
-    <View style={{ width: 40 }} />
+    {selectedCount > 0 ? (
+      <TouchableOpacity
+        style={styles.headerButton}
+        onPress={onUpload}
+        disabled={isUploading}
+      >
+        {isUploading ? (
+          <ActivityIndicator color="black" />
+        ) : (
+          <CloudUpload color="black" size={28} />
+        )}
+      </TouchableOpacity>
+    ) : (
+      <View style={{ width: 40 }} />
+    )}
   </View>
 );
 
@@ -108,6 +128,9 @@ const GalleryScreen = ({ navigation }) => {
   const [pageInfo, setPageInfo] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [cloudMedia, setCloudMedia] = useState([]);
+  const [loadingCloud, setLoadingCloud] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [selectedItems, setSelectedItems] = useState([]);
 
   async function hasAndroidPermission() {
@@ -157,6 +180,39 @@ const GalleryScreen = ({ navigation }) => {
     return await getRequestPermissionPromise();
   }
 
+  const loadCloudMedia = async () => {
+    // Avoid re-fetching if data is already present
+    if (cloudMedia.length > 0) return;
+
+    setLoadingCloud(true);
+    try {
+      const response = await fetch('https://vesafilip.eu/api/media/');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      // The API returns an array of objects with the new structure
+      setCloudMedia(data);
+    } catch (error) {
+      console.error('Failed to fetch cloud media:', error);
+      // Optionally, set an error state here to show a message to the user
+    } finally {
+      setLoadingCloud(false);
+    }
+  };
+
+  const handleCloudItemPress = item => {
+    if (item.mediaType === 'photo') {
+      navigation.navigate('PhotoView', {
+        photoUri: item.urls.medium, // Use medium quality for viewing
+      });
+    } else if (item.mediaType === 'video') {
+      Linking.openURL(item.urls.original).catch(err =>
+        console.error('Failed to open video URL:', err),
+      );
+    }
+  };
+
   const loadMedia = async after => {
     if (Platform.OS === 'android' && !(await hasAndroidPermission())) {
       return;
@@ -175,8 +231,16 @@ const GalleryScreen = ({ navigation }) => {
   };
 
   useEffect(() => {
-    loadMedia();
-  }, []);
+    if (activeTab === 'local') {
+      // Load local media if it hasn't been loaded yet
+      if (media.length === 0) {
+        loadMedia();
+      }
+    } else if (activeTab === 'storage') {
+      // Load cloud media when the storage tab is active
+      loadCloudMedia();
+    }
+  }, [activeTab]);
 
   const loadMoreMedia = () => {
     if (pageInfo?.has_next_page && !loadingMore) {
@@ -190,15 +254,17 @@ const GalleryScreen = ({ navigation }) => {
     if (isSelectionMode) return;
 
     setIsSelectionMode(true);
-    setSelectedItems([item.node.image.uri]);
+    setSelectedItems([item.node]);
   };
 
   const handlePress = item => {
-    const uri = item.node.image.uri;
+    const node = item.node;
+    const uri = node.image.uri;
     if (isSelectionMode) {
-      const newSelectedItems = selectedItems.includes(uri)
-        ? selectedItems.filter(i => i !== uri)
-        : [...selectedItems, uri];
+      const isCurrentlySelected = selectedItems.some(i => i.image.uri === uri);
+      const newSelectedItems = isCurrentlySelected
+        ? selectedItems.filter(i => i.image.uri !== uri)
+        : [...selectedItems, node];
 
       if (newSelectedItems.length === 0) {
         setIsSelectionMode(false);
@@ -224,17 +290,67 @@ const GalleryScreen = ({ navigation }) => {
     setSelectedItems([]);
   };
 
+  const handleUpload = async () => {
+    if (selectedItems.length === 0) {
+      Alert.alert('No Files Selected', 'Please select files to upload.');
+      return;
+    }
+
+    setIsUploading(true);
+    const formData = new FormData();
+
+    selectedItems.forEach(itemNode => {
+      const file = {
+        uri: itemNode.image.uri,
+        // Provide a fallback filename if it's missing
+        name: itemNode.image.filename || `media_${Date.now()}`,
+        type: itemNode.type,
+      };
+      formData.append('mediaFiles', file);
+    });
+
+    try {
+      const response = await fetch('https://vesafilip.eu/api/media/upload', {
+        method: 'POST',
+        body: formData,
+        // 'Content-Type': 'multipart/form-data' is set automatically by fetch
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Upload failed with status ${response.status}: ${errorText}`,
+        );
+      }
+
+      Alert.alert(
+        'Upload Complete',
+        `${selectedItems.length} file(s) uploaded successfully.`,
+      );
+      // Refresh cloud media on next visit and exit selection mode
+      setCloudMedia([]);
+      cancelSelection();
+    } catch (error) {
+      console.error('Upload error:', error);
+      Alert.alert('Upload Failed', `An error occurred: ${error.message}`);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       {isSelectionMode ? (
         <SelectionHeader
           onCancel={cancelSelection}
           selectedCount={selectedItems.length}
+          onUpload={handleUpload}
+          isUploading={isUploading}
         />
       ) : (
         <Header navigation={navigation} />
       )}
-      {activeTab === 'local' ? (
+      {activeTab === 'local' && (
         <FlatList
           data={media}
           numColumns={3}
@@ -243,7 +359,7 @@ const GalleryScreen = ({ navigation }) => {
           renderItem={({ item }) => {
             const isVideo = item.node.type.startsWith('video');
             const uri = item.node.image.uri;
-            const isSelected = selectedItems.includes(uri);
+            const isSelected = selectedItems.some(i => i.image.uri === uri);
             return (
               <TouchableOpacity
                 style={styles.imageTouchable}
@@ -275,9 +391,47 @@ const GalleryScreen = ({ navigation }) => {
             loadingMore && <ActivityIndicator color="#362419" />
           }
         />
-      ) : (
+      )}
+      {activeTab === 'storage' &&
+        (loadingCloud ? (
+          <View style={styles.placeholderContainer}>
+            <ActivityIndicator size="large" color="#362419" />
+          </View>
+        ) : (
+          <FlatList
+            data={cloudMedia}
+            numColumns={3}
+            contentContainerStyle={styles.listContentContainer}
+            keyExtractor={item => item._id}
+            renderItem={({ item }) => {
+              const isVideo = item.mediaType === 'video';
+              return (
+                <TouchableOpacity
+                  style={styles.imageTouchable}
+                  onPress={() => handleCloudItemPress(item)}
+                >
+                  <SharedElement
+                    id={`photo.${item.urls.medium}`}
+                    style={{ flex: 1 }}
+                  >
+                    <Image
+                      style={styles.image}
+                      source={{ uri: item.urls.thumbnail }}
+                    />
+                  </SharedElement>
+                  {isVideo && (
+                    <View style={styles.videoIconContainer}>
+                      <Play color="white" size={24} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            }}
+          />
+        ))}
+      {activeTab !== 'local' && activeTab !== 'storage' && (
         <View style={styles.placeholderContainer}>
-          <Text style={styles.placeholderText}>Cloud Storage Coming Soon</Text>
+          <Text style={styles.placeholderText}>Coming Soon</Text>
         </View>
       )}
       {!isSelectionMode && (
