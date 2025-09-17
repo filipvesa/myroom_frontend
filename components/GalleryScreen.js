@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  ToastAndroid,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
@@ -25,6 +26,9 @@ import {
   Check,
   CloudUpload,
 } from 'lucide-react-native';
+import RNFS from 'react-native-fs';
+import FileViewer from 'react-native-file-viewer';
+import { addFilesToUploadQueue } from '../services/UploadManager';
 
 const Header = ({ navigation }) => (
   <View style={styles.header}>
@@ -44,12 +48,7 @@ const Header = ({ navigation }) => (
   </View>
 );
 
-const SelectionHeader = ({
-  onCancel,
-  selectedCount,
-  onUpload,
-  isUploading,
-}) => (
+const SelectionHeader = ({ onCancel, selectedCount, onUpload }) => (
   <View style={styles.header}>
     <TouchableOpacity style={styles.headerButton} onPress={onCancel}>
       {/* Using a multiplication sign for a cleaner 'X' */}
@@ -59,16 +58,8 @@ const SelectionHeader = ({
       <Text style={styles.headerTitle}>{selectedCount} selected</Text>
     </View>
     {selectedCount > 0 ? (
-      <TouchableOpacity
-        style={styles.headerButton}
-        onPress={onUpload}
-        disabled={isUploading}
-      >
-        {isUploading ? (
-          <ActivityIndicator color="black" />
-        ) : (
-          <CloudUpload color="black" size={28} />
-        )}
+      <TouchableOpacity style={styles.headerButton} onPress={onUpload}>
+        <CloudUpload color="black" size={28} />
       </TouchableOpacity>
     ) : (
       <View style={{ width: 40 }} />
@@ -130,7 +121,6 @@ const GalleryScreen = ({ navigation }) => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [cloudMedia, setCloudMedia] = useState([]);
   const [loadingCloud, setLoadingCloud] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
   const [selectedItems, setSelectedItems] = useState([]);
 
   async function hasAndroidPermission() {
@@ -207,9 +197,40 @@ const GalleryScreen = ({ navigation }) => {
         photoUri: item.urls.medium, // Use medium quality for viewing
       });
     } else if (item.mediaType === 'video') {
-      Linking.openURL(item.urls.original).catch(err =>
-        console.error('Failed to open video URL:', err),
-      );
+      playRemoteVideo(item.urls.original);
+    }
+  };
+
+  const playRemoteVideo = async videoUrl => {
+    // Show a toast or a small indicator that the video is preparing
+    if (Platform.OS === 'android') {
+      ToastAndroid.show('Preparing video...', ToastAndroid.SHORT);
+    }
+
+    // Define a temporary path for the video file
+    const localFile = `${RNFS.CachesDirectoryPath}/temporary-video.mp4`;
+
+    const options = {
+      fromUrl: videoUrl,
+      toFile: localFile,
+    };
+
+    try {
+      // Download the file
+      const ret = RNFS.downloadFile(options);
+      await ret.promise;
+
+      // Open the local file with the default video player
+      await FileViewer.open(localFile, {
+        showOpenWithDialog: true, // Optional: let the user choose the player
+        onDismiss: () => {
+          // When the player is closed, delete the temporary file
+          RNFS.unlink(localFile).catch(err => console.error(err));
+        },
+      });
+    } catch (error) {
+      console.error('Error playing video:', error);
+      Alert.alert('Error', 'Could not play the video.');
     }
   };
 
@@ -290,52 +311,22 @@ const GalleryScreen = ({ navigation }) => {
     setSelectedItems([]);
   };
 
-  const handleUpload = async () => {
+  const handleUpload = () => {
     if (selectedItems.length === 0) {
       Alert.alert('No Files Selected', 'Please select files to upload.');
       return;
     }
 
-    setIsUploading(true);
-    const formData = new FormData();
+    // Hand off the files to the upload manager
+    addFilesToUploadQueue(selectedItems);
 
-    selectedItems.forEach(itemNode => {
-      const file = {
-        uri: itemNode.image.uri,
-        // Provide a fallback filename if it's missing
-        name: itemNode.image.filename || `media_${Date.now()}`,
-        type: itemNode.type,
-      };
-      formData.append('mediaFiles', file);
-    });
-
-    try {
-      const response = await fetch('https://vesafilip.eu/api/media/upload', {
-        method: 'POST',
-        body: formData,
-        // 'Content-Type': 'multipart/form-data' is set automatically by fetch
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `Upload failed with status ${response.status}: ${errorText}`,
-        );
-      }
-
-      Alert.alert(
-        'Upload Complete',
-        `${selectedItems.length} file(s) uploaded successfully.`,
-      );
-      // Refresh cloud media on next visit and exit selection mode
-      setCloudMedia([]);
-      cancelSelection();
-    } catch (error) {
-      console.error('Upload error:', error);
-      Alert.alert('Upload Failed', `An error occurred: ${error.message}`);
-    } finally {
-      setIsUploading(false);
-    }
+    // Provide immediate feedback and reset the UI
+    Alert.alert(
+      'Upload Started',
+      `${selectedItems.length} file(s) will be uploaded in the background.`,
+    );
+    setCloudMedia([]); // Invalidate cloud media to force a refresh on next visit
+    cancelSelection();
   };
 
   return (
@@ -345,7 +336,6 @@ const GalleryScreen = ({ navigation }) => {
           onCancel={cancelSelection}
           selectedCount={selectedItems.length}
           onUpload={handleUpload}
-          isUploading={isUploading}
         />
       ) : (
         <Header navigation={navigation} />
