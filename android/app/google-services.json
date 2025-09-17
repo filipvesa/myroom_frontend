@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "573599356563",
+    "project_id": "myroom-frontend",
+    "storage_bucket": "myroom-frontend.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:573599356563:android:8acdfdcdc0515e9ab61f66",
+        "android_client_info": {
+          "package_name": "com.myroom_frontend"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAJ4srHOnyH2kRSf-15BLWcYsDSr-1vNKI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

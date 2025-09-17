@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createSharedElementStackNavigator } from 'react-navigation-shared-element';
 import { StackCardStyleInterpolator } from '@react-navigation/stack';
@@ -7,12 +7,15 @@ import SplashScreen from './components/SplashScreen';
 import MainScreen from './components/MainScreen';
 import GalleryScreen from './components/GalleryScreen';
 import PhotoViewScreen from './components/PhotoViewScreen';
+import VideoPlayerScreen from './components/VideoPlayerScreen';
+import { initializeNotifications } from './services/NotificationManager';
 
 export type RootStackParamList = {
   Splash: undefined;
   Main: undefined;
   Gallery: undefined;
   PhotoView: { photoUri: string };
+  VideoPlayer: { videoUri: string };
 };
 
 // This is a robust way to get the props type for the interpolator.
@@ -22,6 +25,10 @@ type StackCardStyleInterpolatorProps =
 const Stack = createSharedElementStackNavigator<RootStackParamList>();
 
 function App() {
+  useEffect(() => {
+    initializeNotifications();
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <NavigationContainer>
@@ -50,6 +57,11 @@ function App() {
               }),
             }}
             sharedElements={route => [`photo.${route.params.photoUri}`]}
+          />
+          <Stack.Screen
+            name="VideoPlayer"
+            component={VideoPlayerScreen}
+            options={{ headerShown: false }}
           />
         </Stack.Navigator>
       </NavigationContainer>

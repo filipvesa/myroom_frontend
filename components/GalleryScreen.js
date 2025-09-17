@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  ToastAndroid,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
@@ -25,10 +24,11 @@ import {
   Play,
   Check,
   CloudUpload,
+  File,
+  Trash,
 } from 'lucide-react-native';
-import RNFS from 'react-native-fs';
-import FileViewer from 'react-native-file-viewer';
 import { addFilesToUploadQueue } from '../services/UploadManager';
+import RNFS from 'react-native-fs';
 
 const Header = ({ navigation }) => (
   <View style={styles.header}>
@@ -48,7 +48,13 @@ const Header = ({ navigation }) => (
   </View>
 );
 
-const SelectionHeader = ({ onCancel, selectedCount, onUpload }) => (
+const SelectionHeader = ({
+  onCancel,
+  selectedCount,
+  onUpload,
+  onDelete,
+  activeTab,
+}) => (
   <View style={styles.header}>
     <TouchableOpacity style={styles.headerButton} onPress={onCancel}>
       {/* Using a multiplication sign for a cleaner 'X' */}
@@ -57,13 +63,17 @@ const SelectionHeader = ({ onCancel, selectedCount, onUpload }) => (
     <View style={styles.headerTitleContainer}>
       <Text style={styles.headerTitle}>{selectedCount} selected</Text>
     </View>
-    {selectedCount > 0 ? (
+    {selectedCount > 0 && activeTab === 'local' && (
       <TouchableOpacity style={styles.headerButton} onPress={onUpload}>
         <CloudUpload color="black" size={28} />
       </TouchableOpacity>
-    ) : (
-      <View style={{ width: 40 }} />
     )}
+    {selectedCount > 0 && activeTab === 'storage' && (
+      <TouchableOpacity style={styles.headerButton} onPress={onDelete}>
+        <Trash color="black" size={28} />
+      </TouchableOpacity>
+    )}
+    {selectedCount === 0 && <View style={{ width: 40 }} />}
   </View>
 );
 
@@ -171,21 +181,62 @@ const GalleryScreen = ({ navigation }) => {
   }
 
   const loadCloudMedia = async () => {
-    // Avoid re-fetching if data is already present
-    if (cloudMedia.length > 0) return;
-
     setLoadingCloud(true);
     try {
+      // 1. Fetch the latest list of media from the server
       const response = await fetch('https://vesafilip.eu/api/media/');
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      const data = await response.json();
-      // The API returns an array of objects with the new structure
-      setCloudMedia(data);
+      const serverMediaList = await response.json();
+
+      // 2. Define cache properties
+      const THUMBNAIL_CACHE_DIR = `${RNFS.CachesDirectoryPath}/thumbnail-cache`;
+      await RNFS.mkdir(THUMBNAIL_CACHE_DIR); // Ensure the directory exists
+      const CACHE_EXPIRY_DAYS = 5;
+
+      // 3. Process each item to check cache or download
+      const processedMedia = await Promise.all(
+        serverMediaList.map(async item => {
+          const remoteThumbnailUrl = item.urls.thumbnail;
+          // Create a safe, unique filename from the URL
+          const localFilename = remoteThumbnailUrl.replace(
+            /[^a-zA-Z0-9]/g,
+            '_',
+          );
+          const localFilepath = `${THUMBNAIL_CACHE_DIR}/${localFilename}`;
+
+          const fileExists = await RNFS.exists(localFilepath);
+          let isCacheValid = false;
+
+          if (fileExists) {
+            const stat = await RNFS.stat(localFilepath);
+            const ageInDays = (new Date() - stat.mtime) / (1000 * 60 * 60 * 24);
+            if (ageInDays < CACHE_EXPIRY_DAYS) {
+              isCacheValid = true;
+            } else {
+              // Cache is stale, delete it so it can be re-downloaded
+              await RNFS.unlink(localFilepath).catch(e => console.log(e));
+            }
+          }
+
+          if (isCacheValid) {
+            // Use the valid, cached version
+            return { ...item, localThumbnailPath: `file://${localFilepath}` };
+          } else {
+            // Download the new thumbnail
+            await RNFS.downloadFile({
+              fromUrl: remoteThumbnailUrl,
+              toFile: localFilepath,
+            }).promise;
+            return { ...item, localThumbnailPath: `file://${localFilepath}` };
+          }
+        }),
+      );
+
+      setCloudMedia(processedMedia);
     } catch (error) {
       console.error('Failed to fetch cloud media:', error);
-      // Optionally, set an error state here to show a message to the user
     } finally {
       setLoadingCloud(false);
     }
@@ -194,44 +245,69 @@ const GalleryScreen = ({ navigation }) => {
   const handleCloudItemPress = item => {
     if (item.mediaType === 'photo') {
       navigation.navigate('PhotoView', {
-        photoUri: item.urls.medium, // Use medium quality for viewing
+        photoUri: item.urls.original, // Use original for full quality viewing
       });
     } else if (item.mediaType === 'video') {
-      playRemoteVideo(item.urls.original);
+      navigation.navigate('VideoPlayer', { videoUri: item.urls.original });
+    } else {
+      // Fallback for other file types (e.g., documents, zip files)
+      Linking.openURL(item.urls.original).catch(err =>
+        console.error('Failed to open URL:', err),
+      );
     }
   };
 
-  const playRemoteVideo = async videoUrl => {
-    // Show a toast or a small indicator that the video is preparing
-    if (Platform.OS === 'android') {
-      ToastAndroid.show('Preparing video...', ToastAndroid.SHORT);
+  const handleCloudItemInteraction = item => {
+    if (isSelectionMode) {
+      // Toggle selection
+      const isCurrentlySelected = selectedItems.some(i => i._id === item._id);
+      const newSelectedItems = isCurrentlySelected
+        ? selectedItems.filter(i => i._id !== item._id)
+        : [...selectedItems, item];
+
+      if (newSelectedItems.length === 0) {
+        setIsSelectionMode(false);
+      }
+      setSelectedItems(newSelectedItems);
+    } else {
+      // Default behavior: view photo or play video
+      handleCloudItemPress(item);
     }
+  };
 
-    // Define a temporary path for the video file
-    const localFile = `${RNFS.CachesDirectoryPath}/temporary-video.mp4`;
+  const handleCloudItemLongPress = item => {
+    if (isSelectionMode) return;
+    setIsSelectionMode(true);
+    setSelectedItems([item]);
+  };
 
-    const options = {
-      fromUrl: videoUrl,
-      toFile: localFile,
-    };
+  const handleDelete = () => {
+    if (selectedItems.length === 0) return;
 
-    try {
-      // Download the file
-      const ret = RNFS.downloadFile(options);
-      await ret.promise;
+    Alert.alert(
+      'Delete Files',
+      `Are you sure you want to delete ${selectedItems.length} file(s) from storage? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const deletePromises = selectedItems.map(item =>
+              fetch(`https://vesafilip.eu/api/media/${item._id}`, {
+                method: 'DELETE',
+              }),
+            );
 
-      // Open the local file with the default video player
-      await FileViewer.open(localFile, {
-        showOpenWithDialog: true, // Optional: let the user choose the player
-        onDismiss: () => {
-          // When the player is closed, delete the temporary file
-          RNFS.unlink(localFile).catch(err => console.error(err));
+            await Promise.all(deletePromises);
+
+            Alert.alert('Success', `${selectedItems.length} file(s) deleted.`);
+            cancelSelection();
+            loadCloudMedia(); // Refresh the list
+          },
         },
-      });
-    } catch (error) {
-      console.error('Error playing video:', error);
-      Alert.alert('Error', 'Could not play the video.');
-    }
+      ],
+    );
   };
 
   const loadMedia = async after => {
@@ -258,7 +334,7 @@ const GalleryScreen = ({ navigation }) => {
         loadMedia();
       }
     } else if (activeTab === 'storage') {
-      // Load cloud media when the storage tab is active
+      // Always refresh cloud media when the storage tab is active
       loadCloudMedia();
     }
   }, [activeTab]);
@@ -299,9 +375,8 @@ const GalleryScreen = ({ navigation }) => {
           photoUri: uri,
         });
       } else {
-        Linking.openURL(uri).catch(err =>
-          console.error('Failed to open video URL:', err),
-        );
+        // Use the new in-app player for local videos as well
+        navigation.navigate('VideoPlayer', { videoUri: uri });
       }
     }
   };
@@ -320,11 +395,7 @@ const GalleryScreen = ({ navigation }) => {
     // Hand off the files to the upload manager
     addFilesToUploadQueue(selectedItems);
 
-    // Provide immediate feedback and reset the UI
-    Alert.alert(
-      'Upload Started',
-      `${selectedItems.length} file(s) will be uploaded in the background.`,
-    );
+    // Immediately reset the UI. The UploadManager will show a notification.
     setCloudMedia([]); // Invalidate cloud media to force a refresh on next visit
     cancelSelection();
   };
@@ -336,6 +407,8 @@ const GalleryScreen = ({ navigation }) => {
           onCancel={cancelSelection}
           selectedCount={selectedItems.length}
           onUpload={handleUpload}
+          onDelete={handleDelete}
+          activeTab={activeTab}
         />
       ) : (
         <Header navigation={navigation} />
@@ -395,23 +468,36 @@ const GalleryScreen = ({ navigation }) => {
             keyExtractor={item => item._id}
             renderItem={({ item }) => {
               const isVideo = item.mediaType === 'video';
+              const isPhoto = item.mediaType === 'photo';
+              const isSelected = selectedItems.some(i => i._id === item._id);
               return (
                 <TouchableOpacity
                   style={styles.imageTouchable}
-                  onPress={() => handleCloudItemPress(item)}
+                  onPress={() => handleCloudItemInteraction(item)}
+                  onLongPress={() => handleCloudItemLongPress(item)}
                 >
                   <SharedElement
-                    id={`photo.${item.urls.medium}`}
+                    id={`photo.${item.urls.original}`}
                     style={{ flex: 1 }}
                   >
                     <Image
                       style={styles.image}
-                      source={{ uri: item.urls.thumbnail }}
+                      source={{ uri: item.localThumbnailPath }}
                     />
                   </SharedElement>
+                  {isSelected && (
+                    <View style={styles.selectionOverlay}>
+                      <Check color="white" size={24} />
+                    </View>
+                  )}
                   {isVideo && (
                     <View style={styles.videoIconContainer}>
                       <Play color="white" size={24} />
+                    </View>
+                  )}
+                  {!isPhoto && !isVideo && (
+                    <View style={styles.videoIconContainer}>
+                      <File color="white" size={24} />
                     </View>
                   )}
                 </TouchableOpacity>

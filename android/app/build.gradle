@@ -1,5 +1,6 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.google.gms.google-services"
 apply plugin: "com.facebook.react"
 
 /**
@@ -110,6 +111,11 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // Add the Firebase BoM
+    implementation(platform("com.google.firebase:firebase-bom:33.1.1"))
+    // Add the dependency for the Cloud Messaging library
+    implementation("com.google.firebase:firebase-messaging")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
