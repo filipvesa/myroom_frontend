@@ -180,11 +180,26 @@ const GalleryScreen = ({ navigation }) => {
     return await getRequestPermissionPromise();
   }
 
+  // In a real app, you would retrieve this from secure storage after a login process.
+  const getAuthToken = async () => {
+    // TODO: Replace this with your actual token retrieval logic.
+    // For example: const token = await AsyncStorage.getItem('user-token');
+    return null; // Returning null for now to work with the placeholder backend
+  };
+
   const loadCloudMedia = async () => {
     setLoadingCloud(true);
     try {
+      const token = await getAuthToken();
+      const headers = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       // 1. Fetch the latest list of media from the server
-      const response = await fetch('https://vesafilip.eu/api/media/');
+      const response = await fetch('https://vesafilip.eu/api/media/', {
+        headers,
+      });
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -237,6 +252,11 @@ const GalleryScreen = ({ navigation }) => {
       setCloudMedia(processedMedia);
     } catch (error) {
       console.error('Failed to fetch cloud media:', error);
+      Alert.alert(
+        'Error Loading Media',
+        'Could not connect to cloud storage. Please check your internet connection or try again later.',
+        [{ text: 'OK' }],
+      );
     } finally {
       setLoadingCloud(false);
     }
@@ -293,9 +313,15 @@ const GalleryScreen = ({ navigation }) => {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            const token = await getAuthToken();
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) {
+              headers['Authorization'] = `Bearer ${token}`;
+            }
             const deletePromises = selectedItems.map(item =>
               fetch(`https://vesafilip.eu/api/media/${item._id}`, {
                 method: 'DELETE',
+                headers,
               }),
             );
 

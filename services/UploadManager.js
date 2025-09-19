@@ -2,7 +2,6 @@ import { Alert } from 'react-native';
 import notifee, { AndroidImportance } from '@notifee/react-native';
 import RNFS from 'react-native-fs';
 import uuid from 'react-native-uuid';
-import { getCurrentFcmToken } from './NotificationManager';
 
 /* This is a simple, in-memory queue for managing file uploads.
  * It processes one file at a time to avoid overwhelming the network.
@@ -100,6 +99,13 @@ async function showSummaryNotification() {
   });
 }
 
+const getAuthToken = async () => {
+  // In a real app, you would retrieve this from secure storage after a login process.
+  // TODO: Replace this with your actual token retrieval logic.
+  // For example: const token = await AsyncStorage.getItem('user-token');
+  return null; // Returning null for now to work with the placeholder backend
+};
+
 const processQueue = async () => {
   if (isProcessing || uploadQueue.length === 0) {
     // If processing is done and the queue is empty, the session is complete.
@@ -140,8 +146,8 @@ const processQueue = async () => {
     const totalSize = fileStat.size;
 
     // --- 2. Chunk and Upload the file ---
-    const CHUNK_SIZE = 30 * 1024 * 1024; // 40MB chunks
-    const CONCURRENT_UPLOAD_LIMIT = 2; // 2 * 40MB = 80MB, which is < 90MB limit
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks - a safer size to prevent memory issues.
+    const CONCURRENT_UPLOAD_LIMIT = 3; // 2 * 5MB = 10MB, well under memory and network limits.
     const uploadId = uuid.v4();
     const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
 
@@ -163,13 +169,17 @@ const processQueue = async () => {
           'base64',
         );
 
+        const token = await getAuthToken();
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
         const chunkResponse = await fetch(
           'https://vesafilip.eu/api/media/upload-chunk',
           {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: headers,
             body: JSON.stringify({
               uploadId: uploadId,
               chunkIndex: chunkIndex,
@@ -199,11 +209,17 @@ const processQueue = async () => {
     await Promise.all(allUploadPromises);
 
     // --- 3. Finalize the upload ---
+    const token = await getAuthToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const completeResponse = await fetch(
       'https://vesafilip.eu/api/media/upload-complete',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({
           uploadId: uploadId,
           filename: filename,

@@ -85,6 +85,11 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        externalNativeBuild {
+            cmake {
+                cppFlags "-D_LIBCPP_ENABLE_CXX20_REMOVED_FORMAT"
+            }
+        }
     }
     signingConfigs {
         debug {
