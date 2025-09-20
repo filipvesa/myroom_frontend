@@ -1,13 +1,8 @@
 import { Alert } from 'react-native';
 import notifee, { AndroidImportance } from '@notifee/react-native';
+import auth from '@react-native-firebase/auth';
 import RNFS from 'react-native-fs';
 import uuid from 'react-native-uuid';
-
-/* This is a simple, in-memory queue for managing file uploads.
- * It processes one file at a time to avoid overwhelming the network.
- * The uploads will continue as long as the app is running in the foreground or background.
- * They will stop if the app is terminated by the user or the OS.
- */
 
 let uploadQueue = [];
 let isProcessing = false;
@@ -32,8 +27,8 @@ async function showUploadNotification(totalFiles) {
     android: {
       channelId,
       progress: {
-        max: totalFiles,
-        current: 0,
+        max: 100,
+        current: 0, // Start with an empty bar, consistent with per-file progress
       },
       ongoing: true,
       autoCancel: false,
@@ -41,21 +36,55 @@ async function showUploadNotification(totalFiles) {
   });
 }
 
-async function updateUploadProgress() {
+function formatEta(seconds) {
+  if (seconds < 0 || !isFinite(seconds)) {
+    return 'Calculating...';
+  }
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s remaining`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s remaining`;
+}
+
+async function updateUploadProgress(
+  currentFilename,
+  progress,
+  etaSeconds,
+  totalFiles,
+  completedFiles,
+) {
+  const title = `Uploading: ${currentFilename}`;
+  const body = `File ${completedFiles + 1} of ${totalFiles} (${formatEta(
+    etaSeconds,
+  )})`;
+
   await notifee.displayNotification({
     id: NOTIFICATION_ID,
-    title: 'Uploading Media',
-    body: `Uploaded ${completedFilesInSession} of ${totalFilesInSession} files`,
+    title: title,
+    body: body,
     android: {
       channelId: 'upload-progress-channel',
       progress: {
-        max: totalFilesInSession,
-        current: completedFilesInSession,
+        max: 100,
+        current: progress,
       },
       ongoing: true,
       autoCancel: false,
     },
   });
+}
+
+async function showProcessingNotification() {
+  // A temporary notification for when a file is done and the next is starting
+  await updateUploadProgress(
+    'Processing...',
+    100,
+    -1,
+    totalFilesInSession,
+    completedFilesInSession,
+  );
 }
 
 async function showSummaryNotification() {
@@ -101,9 +130,11 @@ async function showSummaryNotification() {
 
 const getAuthToken = async () => {
   // In a real app, you would retrieve this from secure storage after a login process.
-  // TODO: Replace this with your actual token retrieval logic.
-  // For example: const token = await AsyncStorage.getItem('user-token');
-  return null; // Returning null for now to work with the placeholder backend
+  const currentUser = auth().currentUser;
+  if (currentUser) {
+    return await currentUser.getIdToken();
+  }
+  return null;
 };
 
 const processQueue = async () => {
@@ -146,6 +177,9 @@ const processQueue = async () => {
     const totalSize = fileStat.size;
 
     // --- 2. Chunk and Upload the file ---
+    let completedChunks = 0;
+    const uploadStartTime = Date.now();
+    let lastUpdateTime = 0;
     const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks - a safer size to prevent memory issues.
     const CONCURRENT_UPLOAD_LIMIT = 3; // 2 * 5MB = 10MB, well under memory and network limits.
     const uploadId = uuid.v4();
@@ -155,58 +189,86 @@ const processQueue = async () => {
       `[UploadManager] Starting chunked upload for ${filename} (ID: ${uploadId}). Size: ${totalSize} bytes, Chunks: ${totalChunks}, Concurrency: ${CONCURRENT_UPLOAD_LIMIT}`,
     );
 
-    const chunkIndexes = Array.from({ length: totalChunks }, (_, i) => i);
-    const activeUploads = new Set();
-    const allUploadPromises = [];
+    // Create a pool of workers for concurrent uploads
+    const chunkQueue = Array.from({ length: totalChunks }, (_, i) => i);
 
-    for (const chunkIndex of chunkIndexes) {
-      const uploadPromise = (async () => {
-        const offset = chunkIndex * CHUNK_SIZE;
-        const chunkData = await RNFS.read(
-          fileUri.replace('file://', ''),
-          CHUNK_SIZE,
-          offset,
-          'base64',
-        );
+    const worker = async () => {
+      while (chunkQueue.length > 0) {
+        const chunkIndex = chunkQueue.shift();
+        if (chunkIndex === undefined) continue;
 
-        const token = await getAuthToken();
-        const headers = { 'Content-Type': 'application/json' };
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-
-        const chunkResponse = await fetch(
-          'https://vesafilip.eu/api/media/upload-chunk',
-          {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify({
-              uploadId: uploadId,
-              chunkIndex: chunkIndex,
-              fileChunk: chunkData,
-            }),
-          },
-        );
-
-        if (!chunkResponse.ok) {
-          throw new Error(
-            `Chunk ${chunkIndex} upload failed with status ${chunkResponse.status}`,
+        try {
+          const offset = chunkIndex * CHUNK_SIZE;
+          const chunkData = await RNFS.read(
+            fileUri.replace('file://', ''),
+            CHUNK_SIZE,
+            offset,
+            'base64',
           );
+
+          const token = await getAuthToken();
+          const headers = { 'Content-Type': 'application/json' };
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+
+          const chunkResponse = await fetch(
+            'https://vesafilip.eu/api/media/upload-chunk',
+            {
+              method: 'POST',
+              headers: headers,
+              body: JSON.stringify({
+                uploadId: uploadId,
+                chunkIndex: chunkIndex,
+                fileChunk: chunkData,
+              }),
+            },
+          );
+
+          if (!chunkResponse.ok) {
+            throw new Error(
+              `Chunk ${chunkIndex} upload failed with status ${chunkResponse.status}`,
+            );
+          }
+
+          // --- Progress Update Logic ---
+          completedChunks++;
+          const now = Date.now();
+          // Throttle updates to prevent flickering (e.g., once per 500ms)
+          if (now - lastUpdateTime > 500) {
+            lastUpdateTime = now;
+            const progress = Math.floor((completedChunks / totalChunks) * 100);
+            const elapsedTime = (now - uploadStartTime) / 1000; // in seconds
+            const bytesUploaded = Math.min(
+              completedChunks * CHUNK_SIZE,
+              totalSize,
+            );
+            const uploadSpeed =
+              elapsedTime > 0 ? bytesUploaded / elapsedTime : 0; // bytes/sec
+            const remainingBytes = totalSize - bytesUploaded;
+            const etaSeconds =
+              uploadSpeed > 0 ? remainingBytes / uploadSpeed : -1;
+
+            await updateUploadProgress(
+              filename,
+              progress,
+              etaSeconds,
+              totalFilesInSession,
+              completedFilesInSession,
+            );
+          }
+        } catch (error) {
+          // Re-add the failed chunk to the queue to be retried by another worker
+          chunkQueue.push(chunkIndex);
+          throw error; // Propagate error to stop the upload process
         }
-      })();
-
-      activeUploads.add(uploadPromise);
-      allUploadPromises.push(uploadPromise);
-
-      uploadPromise.finally(() => activeUploads.delete(uploadPromise));
-
-      if (activeUploads.size >= CONCURRENT_UPLOAD_LIMIT) {
-        await Promise.race(activeUploads);
       }
-    }
+    };
+
+    const workers = Array(CONCURRENT_UPLOAD_LIMIT).fill(null).map(worker);
 
     // Wait for all chunks to be uploaded.
-    await Promise.all(allUploadPromises);
+    await Promise.all(workers);
 
     // --- 3. Finalize the upload ---
     const token = await getAuthToken();
@@ -256,7 +318,7 @@ const processQueue = async () => {
     if (tempFilePath) {
       await RNFS.unlink(tempFilePath).catch(e => console.log(e));
     }
-    await updateUploadProgress();
+    await showProcessingNotification();
     isProcessing = false;
     // Process the next item in the queue
     processQueue();
@@ -282,7 +344,7 @@ export const addFilesToUploadQueue = async files => {
     await showUploadNotification(totalFilesInSession);
   } else {
     totalFilesInSession += filesWithIndex.length;
-    await updateUploadProgress(); // Update the 'max' value
+    await showUploadNotification(totalFilesInSession); // Re-display to update total
   }
 
   uploadQueue.push(...filesWithIndex);

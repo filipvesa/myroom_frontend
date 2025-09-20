@@ -6,16 +6,28 @@ import {
   View,
   TouchableOpacity,
 } from 'react-native';
+import auth from '@react-native-firebase/auth';
+import Orientation from 'react-native-orientation-locker';
 
-const SplashScreen = ({ navigation }) => {
+const SplashScreen = ({ navigation } = {}) => {
   useEffect(() => {
-    const timer = setTimeout(() => {
-      // Automatically navigate to the Main screen after 3 seconds
-      navigation.replace('Main');
-    }, 3000);
+    if (navigation) {
+      const timer = setTimeout(() => {
+        // Check if a user is logged in to decide where to go next.
+        const user = auth().currentUser;
+        if (user) {
+          navigation.replace('Main');
+        } else {
+          navigation.replace('Login');
+        }
+      }, 2000); // Reduced timer for a quicker transition
+      return () => clearTimeout(timer);
+    }
+  }, [navigation]);
 
-    // Clear the timer if the component unmounts (e.g., if the dev button is pressed)
-    return () => clearTimeout(timer);
+  useEffect(() => {
+    // Lock to portrait whenever the splash screen is mounted.
+    Orientation.lockToPortrait();
   }, []);
 
   return (
@@ -36,7 +48,14 @@ const SplashScreen = ({ navigation }) => {
       {__DEV__ && (
         <TouchableOpacity
           style={styles.devButton}
-          onPress={() => navigation.replace('Main')}
+          onPress={() => {
+            const user = auth().currentUser;
+            if (user) {
+              navigation?.replace('Main');
+            } else {
+              navigation?.replace('Login');
+            }
+          }}
         >
           <Text style={styles.devButtonText}>Continue (Dev)</Text>
         </TouchableOpacity>

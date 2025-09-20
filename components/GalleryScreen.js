@@ -13,6 +13,8 @@ import {
   Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import Orientation from 'react-native-orientation-locker';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import { SharedElement } from 'react-navigation-shared-element';
 import {
@@ -26,8 +28,10 @@ import {
   CloudUpload,
   File,
   Trash,
+  Download,
 } from 'lucide-react-native';
 import { addFilesToUploadQueue } from '../services/UploadManager';
+import auth from '@react-native-firebase/auth';
 import RNFS from 'react-native-fs';
 
 const Header = ({ navigation }) => (
@@ -53,6 +57,8 @@ const SelectionHeader = ({
   selectedCount,
   onUpload,
   onDelete,
+  onDownload,
+  onLocalDelete,
   activeTab,
 }) => (
   <View style={styles.header}>
@@ -63,17 +69,28 @@ const SelectionHeader = ({
     <View style={styles.headerTitleContainer}>
       <Text style={styles.headerTitle}>{selectedCount} selected</Text>
     </View>
-    {selectedCount > 0 && activeTab === 'local' && (
-      <TouchableOpacity style={styles.headerButton} onPress={onUpload}>
-        <CloudUpload color="black" size={28} />
-      </TouchableOpacity>
-    )}
-    {selectedCount > 0 && activeTab === 'storage' && (
-      <TouchableOpacity style={styles.headerButton} onPress={onDelete}>
-        <Trash color="black" size={28} />
-      </TouchableOpacity>
-    )}
-    {selectedCount === 0 && <View style={{ width: 40 }} />}
+    <View style={styles.selectionActions}>
+      {selectedCount > 0 && activeTab === 'local' && (
+        <>
+          <TouchableOpacity style={styles.headerButton} onPress={onLocalDelete}>
+            <Trash color="black" size={28} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerButton} onPress={onUpload}>
+            <CloudUpload color="black" size={28} />
+          </TouchableOpacity>
+        </>
+      )}
+      {selectedCount > 0 && activeTab === 'storage' && (
+        <>
+          <TouchableOpacity style={styles.headerButton} onPress={onDownload}>
+            <Download color="black" size={28} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerButton} onPress={onDelete}>
+            <Trash color="black" size={28} />
+          </TouchableOpacity>
+        </>
+      )}
+    </View>
   </View>
 );
 
@@ -133,6 +150,14 @@ const GalleryScreen = ({ navigation }) => {
   const [loadingCloud, setLoadingCloud] = useState(false);
   const [selectedItems, setSelectedItems] = useState([]);
 
+  useFocusEffect(
+    React.useCallback(() => {
+      // Lock to portrait when the gallery is visible. This is important
+      // for when we navigate back from a screen that allowed rotation.
+      Orientation.lockToPortrait(); //
+    }, []),
+  );
+
   async function hasAndroidPermission() {
     const getCheckPermissionPromise = () => {
       if (Platform.Version >= 33) {
@@ -182,15 +207,25 @@ const GalleryScreen = ({ navigation }) => {
 
   // In a real app, you would retrieve this from secure storage after a login process.
   const getAuthToken = async () => {
-    // TODO: Replace this with your actual token retrieval logic.
-    // For example: const token = await AsyncStorage.getItem('user-token');
-    return null; // Returning null for now to work with the placeholder backend
+    const currentUser = auth().currentUser;
+    if (currentUser) {
+      return await currentUser.getIdToken();
+    }
+    return null;
   };
 
   const loadCloudMedia = async () => {
     setLoadingCloud(true);
     try {
       const token = await getAuthToken();
+      // Critical Check: If there's no token, the user is not authenticated.
+      if (!token) {
+        throw new Error(
+          'User not authenticated. Please sign in again.',
+          'Authentication Error',
+        );
+      }
+
       const headers = {};
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
@@ -205,16 +240,32 @@ const GalleryScreen = ({ navigation }) => {
       }
       const serverMediaList = await response.json();
 
+      // --- DEBUGGING: Log the raw data from the server ---
+      console.log(
+        '[DEBUG] Raw data from server:',
+        JSON.stringify(serverMediaList, null, 2),
+      );
+
       // 2. Define cache properties
       const THUMBNAIL_CACHE_DIR = `${RNFS.CachesDirectoryPath}/thumbnail-cache`;
       await RNFS.mkdir(THUMBNAIL_CACHE_DIR); // Ensure the directory exists
       const CACHE_EXPIRY_DAYS = 5;
 
       // 3. Process each item to check cache or download
-      const processedMedia = await Promise.all(
-        serverMediaList.map(async item => {
+      const mediaProcessingPromises = serverMediaList.map(async item => {
+        try {
           const remoteThumbnailUrl = item.urls.thumbnail;
-          // Create a safe, unique filename from the URL
+          const isVideo = item.mediaType.startsWith('video');
+
+          // If no thumbnail URL is provided...
+          if (!remoteThumbnailUrl) {
+            // ...still show videos with a placeholder.
+            if (isVideo) {
+              return { ...item, localThumbnailPath: null };
+            }
+            return null; // Filter out any non-video item that lacks a thumbnail.
+          }
+
           const localFilename = remoteThumbnailUrl.replace(
             /[^a-zA-Z0-9]/g,
             '_',
@@ -227,27 +278,47 @@ const GalleryScreen = ({ navigation }) => {
           if (fileExists) {
             const stat = await RNFS.stat(localFilepath);
             const ageInDays = (new Date() - stat.mtime) / (1000 * 60 * 60 * 24);
-            if (ageInDays < CACHE_EXPIRY_DAYS) {
-              isCacheValid = true;
-            } else {
-              // Cache is stale, delete it so it can be re-downloaded
-              await RNFS.unlink(localFilepath).catch(e => console.log(e));
-            }
+            if (ageInDays < CACHE_EXPIRY_DAYS) isCacheValid = true;
+            else
+              await RNFS.unlink(localFilepath).catch(e =>
+                console.warn('Stale cache unlink failed:', e),
+              );
           }
 
           if (isCacheValid) {
-            // Use the valid, cached version
             return { ...item, localThumbnailPath: `file://${localFilepath}` };
           } else {
-            // Download the new thumbnail
+            // Pass the authentication headers to the download request
             await RNFS.downloadFile({
               fromUrl: remoteThumbnailUrl,
               toFile: localFilepath,
+              headers: headers, // <-- Add this line
             }).promise;
             return { ...item, localThumbnailPath: `file://${localFilepath}` };
           }
-        }),
-      );
+        } catch (e) {
+          // --- DEBUGGING: Log which specific item is failing ---
+          console.error(
+            `[DEBUG] Failed to process item: ${JSON.stringify(item, null, 2)}`,
+          );
+          console.error('[DEBUG] The error was:', e);
+
+          return null; // Return null on failure for this specific item
+        }
+      });
+
+      // Wait for all promises to settle and filter out any that failed (returned null)
+      const processedMedia = (
+        await Promise.all(mediaProcessingPromises)
+      ).filter(item => item !== null);
+
+      // If no media is left after processing, it might indicate a wider issue
+      if (serverMediaList.length > 0 && processedMedia.length === 0) {
+        console.error(
+          'All thumbnail downloads failed. Check network and file system permissions.',
+        );
+        // Optionally, show a specific alert here
+      }
 
       setCloudMedia(processedMedia);
     } catch (error) {
@@ -262,13 +333,21 @@ const GalleryScreen = ({ navigation }) => {
     }
   };
 
-  const handleCloudItemPress = item => {
+  const handleCloudItemPress = async item => {
+    const token = await getAuthToken();
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
     if (item.mediaType === 'photo') {
       navigation.navigate('PhotoView', {
-        photoUri: item.urls.original, // Use original for full quality viewing
+        photoUri: item.urls.original,
+        thumbnailUri: item.localThumbnailPath, // Pass the local thumbnail
+        headers: headers,
       });
-    } else if (item.mediaType === 'video') {
-      navigation.navigate('VideoPlayer', { videoUri: item.urls.original });
+    } else if (item.mediaType.startsWith('video')) {
+      navigation.navigate('VideoPlayer', {
+        videoUri: item.urls.original,
+        headers: headers,
+      });
     } else {
       // Fallback for other file types (e.g., documents, zip files)
       Linking.openURL(item.urls.original).catch(err =>
@@ -330,6 +409,148 @@ const GalleryScreen = ({ navigation }) => {
             Alert.alert('Success', `${selectedItems.length} file(s) deleted.`);
             cancelSelection();
             loadCloudMedia(); // Refresh the list
+          },
+        },
+      ],
+    );
+  };
+
+  const handleDownload = () => {
+    if (selectedItems.length === 0) return;
+
+    Alert.alert(
+      'Download Files',
+      `Are you sure you want to download ${selectedItems.length} file(s) to your device's Downloads folder?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Download',
+          style: 'default',
+          onPress: async () => {
+            try {
+              const token = await getAuthToken();
+              const headers = {};
+              if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+              }
+
+              const downloadAndSavePromises = selectedItems.map(async item => {
+                const downloadUrl = `https://vesafilip.eu/api/media/download/${item._id}/${item.size}`;
+                // Use a temporary path in the cache for the initial download
+                const tempPath = `${RNFS.CachesDirectoryPath}/${item.filename}`;
+
+                console.log(
+                  `[Download] Starting download for ${item.filename} to ${tempPath}`,
+                );
+
+                const downloadResult = await RNFS.downloadFile({
+                  fromUrl: downloadUrl,
+                  toFile: tempPath,
+                  headers: headers,
+                }).promise;
+
+                console.log(
+                  `[Download] Completed for ${item.filename}. Status: ${downloadResult.statusCode}`,
+                );
+
+                if (downloadResult.statusCode !== 200) {
+                  throw new Error(
+                    `Download failed for ${item.filename} with status ${downloadResult.statusCode}`,
+                  );
+                }
+
+                // For photos and videos, save them to the gallery to make them visible
+                if (
+                  item.mediaType === 'photo' ||
+                  item.mediaType.startsWith('video')
+                ) {
+                  console.log(
+                    `[Download] Saving ${item.filename} to device gallery.`,
+                  );
+                  await CameraRoll.save(tempPath, {
+                    type: item.mediaType,
+                    album: 'MyRoom',
+                  });
+                }
+                // For other file types, we can move them to the public Downloads folder
+                else {
+                  const finalPath = `${RNFS.DownloadDirectoryPath}/${item.filename}`;
+                  await RNFS.moveFile(tempPath, finalPath);
+                }
+              });
+
+              await Promise.all(downloadAndSavePromises);
+
+              Alert.alert(
+                'Download Complete',
+                `${selectedItems.length} file(s) have been saved to your device.`,
+              );
+              loadMedia(); // Refresh the local media list
+            } catch (error) {
+              console.error('Failed to download files:', error);
+              Alert.alert(
+                'Download Failed',
+                'Could not download one or more files. Please try again.',
+              );
+            } finally {
+              cancelSelection();
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleLocalDelete = () => {
+    if (selectedItems.length === 0) return;
+
+    Alert.alert(
+      'Delete Local Files',
+      `Are you sure you want to permanently delete ${selectedItems.length} file(s) from your device? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const deletePromises = selectedItems.map(async item => {
+                let fileUri = item.image.uri;
+                // On Android, content URIs must be resolved to a file path first.
+                if (
+                  Platform.OS === 'android' &&
+                  fileUri.startsWith('content://')
+                ) {
+                  // This will copy the file to a temporary location to get a real path.
+                  // Note: This is a common workaround for deleting from the media store.
+                  const stat = await RNFS.stat(fileUri);
+                  fileUri = stat.originalFilepath;
+                }
+                // For iOS and file:// URIs on Android, unlink directly.
+                return RNFS.unlink(fileUri);
+              });
+
+              await Promise.all(deletePromises);
+
+              // Update UI by removing the deleted items from the state
+              const selectedUris = new Set(
+                selectedItems.map(item => item.image.uri),
+              );
+              setMedia(prevMedia =>
+                prevMedia.filter(
+                  item => !selectedUris.has(item.node.image.uri),
+                ),
+              );
+
+              Alert.alert(
+                'Success',
+                `${selectedItems.length} file(s) deleted.`,
+              );
+              cancelSelection();
+            } catch (error) {
+              console.error('Failed to delete local files:', error);
+              Alert.alert('Error', 'Could not delete one or more files.');
+            }
           },
         },
       ],
@@ -434,6 +655,8 @@ const GalleryScreen = ({ navigation }) => {
           selectedCount={selectedItems.length}
           onUpload={handleUpload}
           onDelete={handleDelete}
+          onDownload={handleDownload}
+          onLocalDelete={handleLocalDelete}
           activeTab={activeTab}
         />
       ) : (
@@ -493,7 +716,7 @@ const GalleryScreen = ({ navigation }) => {
             contentContainerStyle={styles.listContentContainer}
             keyExtractor={item => item._id}
             renderItem={({ item }) => {
-              const isVideo = item.mediaType === 'video';
+              const isVideo = item.mediaType.startsWith('video');
               const isPhoto = item.mediaType === 'photo';
               const isSelected = selectedItems.some(i => i._id === item._id);
               return (
@@ -506,10 +729,17 @@ const GalleryScreen = ({ navigation }) => {
                     id={`photo.${item.urls.original}`}
                     style={{ flex: 1 }}
                   >
-                    <Image
-                      style={styles.image}
-                      source={{ uri: item.localThumbnailPath }}
-                    />
+                    {item.localThumbnailPath ? (
+                      <Image
+                        style={styles.image}
+                        source={{ uri: item.localThumbnailPath }}
+                      />
+                    ) : (
+                      // Render a placeholder if no thumbnail is available
+                      <View style={styles.thumbnailPlaceholder}>
+                        <Play color="rgba(255,255,255,0.7)" size={40} />
+                      </View>
+                    )}
                   </SharedElement>
                   {isSelected && (
                     <View style={styles.selectionOverlay}>
@@ -586,6 +816,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+  selectionActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   placeholderContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -600,21 +834,34 @@ const styles = StyleSheet.create({
   imageTouchable: {
     flex: 1 / 3,
     aspectRatio: 1,
-    padding: 10, // Creates space inside each touchable cell
+    // This padding creates the visual gap between images.
+    // A value of 2 means a 4px gap between items.
+    padding: 2,
   },
   image: {
     flex: 1,
     borderRadius: 8,
+    margin: 8,
+
+    // The image should fill its container. The gap is handled by the parent's padding.
+    resizeMode: 'cover',
+  },
+  thumbnailPlaceholder: {
+    flex: 1,
+    borderRadius: 8,
+    margin: 8,
+    backgroundColor: '#333',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   listContentContainer: {
-    // Adds padding to the outside of the entire list.
-    // The combination with item padding creates uniform gaps.
-    padding: 3,
+    // No padding needed here, as the item's padding handles the gaps.
   },
   videoIconContainer: {
     position: 'absolute',
-    bottom: 15, // Increased to account for the parent's padding
-    right: 15, // Increased to account for the parent's padding
+    // Increased from 8 to 16 to move it inside the image's margin
+    bottom: 16,
+    right: 16,
     backgroundColor: 'rgba(0,0,0,0.5)',
     borderRadius: 15,
     width: 30,
@@ -624,8 +871,8 @@ const styles = StyleSheet.create({
   },
   selectionOverlay: {
     position: 'absolute',
-    top: 15,
-    right: 15,
+    top: 8,
+    right: 8,
     width: 30,
     height: 30,
     backgroundColor: 'rgba(0, 122, 255, 0.7)',

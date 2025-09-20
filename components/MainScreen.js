@@ -6,8 +6,18 @@ import {
   View,
   Text,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import Orientation from 'react-native-orientation-locker';
+import auth from '@react-native-firebase/auth';
 
 const MainScreen = ({ navigation }) => {
+  useFocusEffect(
+    React.useCallback(() => {
+      // Lock to portrait when the main screen is visible
+      Orientation.lockToPortrait();
+    }, []),
+  );
+
   return (
     <ImageBackground
       style={styles.container}
@@ -127,6 +137,17 @@ const MainScreen = ({ navigation }) => {
             </Text>
           )}
         </Pressable>
+
+        {/* Sign Out Button */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.signOutButton,
+            { opacity: pressed ? 0.7 : 1 },
+          ]}
+          onPress={() => auth().signOut()}
+        >
+          <Text style={styles.signOutButtonText}>Sign Out</Text>
+        </Pressable>
       </View>
     </ImageBackground>
   );
@@ -197,6 +218,20 @@ const styles = StyleSheet.create({
     top: '71.3%', // % from the top
     left: '22%', // % from the left
     height: '16%', // Example: 15% of the screen's height
+  },
+  signOutButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    backgroundColor: 'rgba(54, 36, 25, 0.7)',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  signOutButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
 });
 

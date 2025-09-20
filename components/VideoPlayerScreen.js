@@ -12,7 +12,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import Orientation from 'react-native-orientation-locker';
 
 const VideoPlayerScreen = ({ route, navigation }) => {
-  const { videoUri } = route.params;
+  const { videoUri, headers } = route.params;
   const [isLoading, setIsLoading] = React.useState(true);
 
   useFocusEffect(
@@ -30,7 +30,7 @@ const VideoPlayerScreen = ({ route, navigation }) => {
     <View style={styles.container}>
       <StatusBar hidden />
       <Video
-        source={{ uri: videoUri }}
+        source={{ uri: videoUri, headers: headers }}
         style={StyleSheet.absoluteFill}
         controls={true} // Show default player controls
         resizeMode="contain"

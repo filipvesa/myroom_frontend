@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Image,
@@ -21,8 +21,17 @@ import Animated, {
 const AnimatedImage = Animated.createAnimatedComponent(Image);
 
 const PhotoViewScreen = ({ route, navigation }) => {
-  const { photoUri } = route.params;
+  const { photoUri, thumbnailUri, headers } = route.params;
   const { width, height } = useWindowDimensions();
+
+  // Start by showing the thumbnail, then switch to the full-res image
+  const [imageSource, setImageSource] = useState({ uri: thumbnailUri });
+
+  useEffect(() => {
+    // Once the component mounts, set the source to the high-resolution image.
+    // The thumbnail will be displayed until this one loads.
+    setImageSource({ uri: photoUri, headers: headers });
+  }, [photoUri, headers]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -120,7 +129,7 @@ const PhotoViewScreen = ({ route, navigation }) => {
         <StatusBar hidden />
         <SharedElement id={`photo.${photoUri}`} style={StyleSheet.absoluteFill}>
           <AnimatedImage
-            source={{ uri: photoUri }}
+            source={imageSource}
             style={[styles.image, animatedStyle]}
             resizeMode="contain"
           />
