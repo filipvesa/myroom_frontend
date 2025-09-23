@@ -1,5 +1,5 @@
 import messaging from '@react-native-firebase/messaging';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import notifee, { AndroidImportance } from '@notifee/react-native';
 
 let fcmToken = null;
@@ -8,10 +8,17 @@ let fcmToken = null;
  * Requests permission from the user to send push notifications.
  */
 async function requestUserPermission() {
+  // For remote push notifications via FCM
   const authStatus = await messaging().requestPermission();
   const enabled =
     authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
     authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+
+  // For local notifications via Notifee on Android 13+
+  if (Platform.OS === 'android') {
+    // This will prompt the user for permission on API 33+
+    await notifee.requestPermission();
+  }
 
   if (enabled) {
     console.log('Notification Authorization status:', authStatus);

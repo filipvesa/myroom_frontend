@@ -8,7 +8,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import auth from '@react-native-firebase/auth';
+import { getAuth } from '@react-native-firebase/auth';
 import {
   GoogleSignin,
   statusCodes,
@@ -38,7 +38,7 @@ const LoginScreen = ({ navigation }) => {
       return;
     }
     setLoading(true);
-    auth()
+    getAuth()
       .signInWithEmailAndPassword(email, password)
       .then(() => {
         console.log('User signed in!');
@@ -58,7 +58,7 @@ const LoginScreen = ({ navigation }) => {
       );
       return;
     }
-    auth()
+    getAuth()
       .sendPasswordResetEmail(email)
       .then(() => {
         Alert.alert(
@@ -84,10 +84,10 @@ const LoginScreen = ({ navigation }) => {
       console.log('Google Sign-In successful, got ID token.');
 
       // Create a Google credential with the token
-      const googleCredential = auth.GoogleAuthProvider.credential(idToken);
+      const googleCredential = getAuth.GoogleAuthProvider.credential(idToken);
 
       // Sign-in the user with the credential
-      await auth().signInWithCredential(googleCredential);
+      await getAuth().signInWithCredential(googleCredential);
     } catch (error) {
       if (error.code === statusCodes.SIGN_IN_CANCELLED) {
         // user cancelled the login flow

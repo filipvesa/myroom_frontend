@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Orientation from 'react-native-orientation-locker';
-import auth from '@react-native-firebase/auth';
+import { getAuth } from '@react-native-firebase/auth';
 
 const MainScreen = ({ navigation }) => {
   useFocusEffect(
@@ -144,7 +144,7 @@ const MainScreen = ({ navigation }) => {
             styles.signOutButton,
             { opacity: pressed ? 0.7 : 1 },
           ]}
-          onPress={() => auth().signOut()}
+          onPress={() => getAuth().signOut()}
         >
           <Text style={styles.signOutButtonText}>Sign Out</Text>
         </Pressable>

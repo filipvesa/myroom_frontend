@@ -31,7 +31,7 @@ import {
   Download,
 } from 'lucide-react-native';
 import { addFilesToUploadQueue } from '../services/UploadManager';
-import auth from '@react-native-firebase/auth';
+import { getAuth } from '@react-native-firebase/auth';
 import RNFS from 'react-native-fs';
 
 const Header = ({ navigation }) => (
@@ -207,11 +207,13 @@ const GalleryScreen = ({ navigation }) => {
 
   // In a real app, you would retrieve this from secure storage after a login process.
   const getAuthToken = async () => {
-    const currentUser = auth().currentUser;
-    if (currentUser) {
-      return await currentUser.getIdToken();
+    try {
+      const authInstance = getAuth();
+      return await authInstance.currentUser?.getIdToken();
+    } catch (error) {
+      console.error('Failed to get auth token', error);
+      return null;
     }
-    return null;
   };
 
   const loadCloudMedia = async () => {

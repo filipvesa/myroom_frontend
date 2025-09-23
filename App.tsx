@@ -3,7 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createSharedElementStackNavigator } from 'react-navigation-shared-element';
 import { StackCardStyleInterpolator } from '@react-navigation/stack';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
+import { getAuth, FirebaseAuthTypes } from '@react-native-firebase/auth';
 import SplashScreen from './components/SplashScreen';
 import MainScreen from './components/MainScreen';
 import GalleryScreen from './components/GalleryScreen';
@@ -12,6 +12,7 @@ import VideoPlayerScreen from './components/VideoPlayerScreen';
 import LoginScreen from './components/LoginScreen';
 import SignUpScreen from './components/SignUpScreen';
 import { initializeNotifications } from './services/NotificationManager';
+import { initializeRemoteLogging } from './services/RemoteLog';
 
 export type RootStackParamList = {
   Splash: undefined;
@@ -81,8 +82,9 @@ function App() {
 
   useEffect(() => {
     initializeNotifications();
+    initializeRemoteLogging();
 
-    const subscriber = auth().onAuthStateChanged(userState => {
+    const subscriber = getAuth().onAuthStateChanged(userState => {
       setUser(userState);
       if (initializing) {
         setInitializing(false);

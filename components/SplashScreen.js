@@ -6,7 +6,7 @@ import {
   View,
   TouchableOpacity,
 } from 'react-native';
-import auth from '@react-native-firebase/auth';
+import { getAuth } from '@react-native-firebase/auth';
 import Orientation from 'react-native-orientation-locker';
 
 const SplashScreen = ({ navigation } = {}) => {
@@ -14,7 +14,7 @@ const SplashScreen = ({ navigation } = {}) => {
     if (navigation) {
       const timer = setTimeout(() => {
         // Check if a user is logged in to decide where to go next.
-        const user = auth().currentUser;
+        const user = getAuth().currentUser;
         if (user) {
           navigation.replace('Main');
         } else {
@@ -49,7 +49,7 @@ const SplashScreen = ({ navigation } = {}) => {
         <TouchableOpacity
           style={styles.devButton}
           onPress={() => {
-            const user = auth().currentUser;
+            const user = getAuth().currentUser;
             if (user) {
               navigation?.replace('Main');
             } else {
