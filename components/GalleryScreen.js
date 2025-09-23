@@ -3,8 +3,9 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
+  SectionList,
   FlatList,
+  TouchableOpacity,
   Image,
   Platform,
   PermissionsAndroid,
@@ -34,7 +35,7 @@ import { addFilesToUploadQueue } from '../services/UploadManager';
 import { getAuth } from '@react-native-firebase/auth';
 import RNFS from 'react-native-fs';
 
-const Header = ({ navigation }) => (
+const Header = ({ navigation, onClean, activeTab }) => (
   <View style={styles.header}>
     <TouchableOpacity
       style={styles.headerButton}
@@ -48,7 +49,14 @@ const Header = ({ navigation }) => (
         <Text style={styles.proBadgeText}>PRO</Text>
       </View>
     </View>
-    <View style={{ width: 40 }} />
+    {/* Show the clean button only on the local tab */}
+    {activeTab === 'local' ? (
+      <TouchableOpacity style={styles.headerButton} onPress={onClean}>
+        <Wrench color="black" size={24} />
+      </TouchableOpacity>
+    ) : (
+      <View style={{ width: 40 }} />
+    )}
   </View>
 );
 
@@ -140,15 +148,47 @@ const BottomNavigation = ({ activeTab, onTabPress }) => {
   );
 };
 
+const groupMediaByDateAndRow = (mediaList, dateExtractor) => {
+  if (!mediaList || mediaList.length === 0) return [];
+
+  const groupedByDate = mediaList.reduce((acc, item) => {
+    const date = dateExtractor(item);
+    if (!date) return acc;
+
+    const d = new Date(date);
+    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+      2,
+      '0',
+    )}-${String(d.getDate()).padStart(2, '0')}`;
+
+    if (!acc[dateKey]) acc[dateKey] = [];
+    acc[dateKey].push(item);
+    return acc;
+  }, {});
+
+  return Object.keys(groupedByDate)
+    .sort((a, b) => new Date(b) - new Date(a))
+    .map(dateKey => ({
+      title: new Date(dateKey).toLocaleDateString('en-US', {
+        timeZone: 'UTC',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }),
+      data: [groupedByDate[dateKey]], // This is the key: wrap all items for a date into a single array element for renderItem
+    }));
+};
+
 const GalleryScreen = ({ navigation }) => {
   const [activeTab, setActiveTab] = useState('local');
   const [media, setMedia] = useState([]);
-  const [pageInfo, setPageInfo] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [cloudMedia, setCloudMedia] = useState([]);
+  const [groupedLocalMedia, setGroupedLocalMedia] = useState([]);
   const [loadingCloud, setLoadingCloud] = useState(false);
-  const [selectedItems, setSelectedItems] = useState([]);
+  const [groupedCloudMedia, setGroupedCloudMedia] = useState([]);
+  const [selectedItems, setSelectedItems] = useState(new Map());
 
   useFocusEffect(
     React.useCallback(() => {
@@ -322,7 +362,14 @@ const GalleryScreen = ({ navigation }) => {
         // Optionally, show a specific alert here
       }
 
+      // Group the successfully processed media by date
+      const grouped = groupMediaByDateAndRow(
+        processedMedia,
+        item => item.createdAt,
+      );
+
       setCloudMedia(processedMedia);
+      setGroupedCloudMedia(grouped);
     } catch (error) {
       console.error('Failed to fetch cloud media:', error);
       Alert.alert(
@@ -361,12 +408,13 @@ const GalleryScreen = ({ navigation }) => {
   const handleCloudItemInteraction = item => {
     if (isSelectionMode) {
       // Toggle selection
-      const isCurrentlySelected = selectedItems.some(i => i._id === item._id);
-      const newSelectedItems = isCurrentlySelected
-        ? selectedItems.filter(i => i._id !== item._id)
-        : [...selectedItems, item];
-
-      if (newSelectedItems.length === 0) {
+      const newSelectedItems = new Map(selectedItems);
+      if (newSelectedItems.has(item._id)) {
+        newSelectedItems.delete(item._id);
+      } else {
+        newSelectedItems.set(item._id, item);
+      }
+      if (newSelectedItems.size === 0) {
         setIsSelectionMode(false);
       }
       setSelectedItems(newSelectedItems);
@@ -379,15 +427,15 @@ const GalleryScreen = ({ navigation }) => {
   const handleCloudItemLongPress = item => {
     if (isSelectionMode) return;
     setIsSelectionMode(true);
-    setSelectedItems([item]);
+    setSelectedItems(new Map([[item._id, item]]));
   };
 
   const handleDelete = () => {
-    if (selectedItems.length === 0) return;
+    if (selectedItems.size === 0) return;
 
     Alert.alert(
       'Delete Files',
-      `Are you sure you want to delete ${selectedItems.length} file(s) from storage? This action cannot be undone.`,
+      `Are you sure you want to delete ${selectedItems.size} file(s) from storage? This action cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -399,16 +447,17 @@ const GalleryScreen = ({ navigation }) => {
             if (token) {
               headers['Authorization'] = `Bearer ${token}`;
             }
-            const deletePromises = selectedItems.map(item =>
-              fetch(`https://vesafilip.eu/api/media/${item._id}`, {
-                method: 'DELETE',
-                headers,
-              }),
+            const deletePromises = Array.from(selectedItems.values()).map(
+              item =>
+                fetch(`https://vesafilip.eu/api/media/${item._id}`, {
+                  method: 'DELETE',
+                  headers,
+                }),
             );
 
             await Promise.all(deletePromises);
 
-            Alert.alert('Success', `${selectedItems.length} file(s) deleted.`);
+            Alert.alert('Success', `${selectedItems.size} file(s) deleted.`);
             cancelSelection();
             loadCloudMedia(); // Refresh the list
           },
@@ -418,11 +467,11 @@ const GalleryScreen = ({ navigation }) => {
   };
 
   const handleDownload = () => {
-    if (selectedItems.length === 0) return;
+    if (selectedItems.size === 0) return;
 
     Alert.alert(
       'Download Files',
-      `Are you sure you want to download ${selectedItems.length} file(s) to your device's Downloads folder?`,
+      `Are you sure you want to download ${selectedItems.size} file(s) to your device's Downloads folder?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -436,7 +485,9 @@ const GalleryScreen = ({ navigation }) => {
                 headers['Authorization'] = `Bearer ${token}`;
               }
 
-              const downloadAndSavePromises = selectedItems.map(async item => {
+              const downloadAndSavePromises = Array.from(
+                selectedItems.values(),
+              ).map(async item => {
                 const downloadUrl = `https://vesafilip.eu/api/media/download/${item._id}/${item.size}`;
                 // Use a temporary path in the cache for the initial download
                 const tempPath = `${RNFS.CachesDirectoryPath}/${item.filename}`;
@@ -485,7 +536,7 @@ const GalleryScreen = ({ navigation }) => {
 
               Alert.alert(
                 'Download Complete',
-                `${selectedItems.length} file(s) have been saved to your device.`,
+                `${selectedItems.size} file(s) have been saved to your device.`,
               );
               loadMedia(); // Refresh the local media list
             } catch (error) {
@@ -503,12 +554,105 @@ const GalleryScreen = ({ navigation }) => {
     );
   };
 
+  const handleCleanDuplicates = async () => {
+    Alert.alert(
+      'Clean Local Duplicates',
+      'This will check all local files against cloud storage and delete any that are already backed up. This action cannot be undone. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          onPress: async () => {
+            setLoadingCloud(true); // Reuse the main loading indicator
+            try {
+              // 1. Fetch all cloud media filenames into a Set for fast lookups
+              console.log('[Clean] Fetching cloud media list...');
+              const token = await getAuthToken();
+              if (!token) throw new Error('Not authenticated');
+              const response = await fetch('https://vesafilip.eu/api/media/', {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (!response.ok) {
+                throw new Error('Failed to fetch cloud media list.');
+              }
+              const cloudMediaList = await response.json();
+              const cloudFilenames = new Set(
+                cloudMediaList.map(item => item.filename),
+              );
+
+              if (cloudFilenames.size === 0) {
+                Alert.alert(
+                  'Info',
+                  'No media found in cloud storage. Nothing to clean.',
+                );
+                return;
+              }
+              console.log(
+                `[Clean] Found ${cloudFilenames.size} files in the cloud.`,
+              );
+
+              // 2. Fetch all local media recursively
+              console.log('[Clean] Fetching all local media...');
+              let allLocalMedia = [];
+              let hasNextPage = true;
+              let after = undefined;
+              while (hasNextPage) {
+                const result = await CameraRoll.getPhotos({
+                  first: 1000,
+                  assetType: 'All',
+                  after,
+                });
+                allLocalMedia.push(...result.edges);
+                hasNextPage = result.page_info.has_next_page;
+                after = result.page_info.end_cursor;
+              }
+              console.log(
+                `[Clean] Found ${allLocalMedia.length} total local files.`,
+              );
+
+              // 3. Identify and delete duplicates
+              const duplicatesToDelete = allLocalMedia.filter(localItem =>
+                cloudFilenames.has(localItem.node.image.filename),
+              );
+
+              if (duplicatesToDelete.length === 0) {
+                Alert.alert('All Clean!', 'No duplicate files were found.');
+                return;
+              }
+
+              const urisToDelete = duplicatesToDelete.map(
+                item => item.node.image.uri,
+              );
+              await CameraRoll.deletePhotos(urisToDelete);
+
+              Alert.alert(
+                'Cleanup Complete',
+                `Successfully deleted ${duplicatesToDelete.length} duplicate file(s) from your device.`,
+              );
+
+              // 4. Refresh the local media list in the UI
+              loadMedia();
+            } catch (error) {
+              console.error('[Clean] Cleanup failed:', error);
+              Alert.alert(
+                'Error',
+                'The cleanup process failed. Please try again.',
+              );
+            } finally {
+              setLoadingCloud(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const handleLocalDelete = () => {
-    if (selectedItems.length === 0) return;
+    if (selectedItems.size === 0) return;
 
     Alert.alert(
       'Delete Local Files',
-      `Are you sure you want to permanently delete ${selectedItems.length} file(s) from your device? This action cannot be undone.`,
+      `Are you sure you want to permanently delete ${selectedItems.size} file(s) from your device? This action cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -516,39 +660,20 @@ const GalleryScreen = ({ navigation }) => {
           style: 'destructive',
           onPress: async () => {
             try {
-              const deletePromises = selectedItems.map(async item => {
-                let fileUri = item.image.uri;
-                // On Android, content URIs must be resolved to a file path first.
-                if (
-                  Platform.OS === 'android' &&
-                  fileUri.startsWith('content://')
-                ) {
-                  // This will copy the file to a temporary location to get a real path.
-                  // Note: This is a common workaround for deleting from the media store.
-                  const stat = await RNFS.stat(fileUri);
-                  fileUri = stat.originalFilepath;
-                }
-                // For iOS and file:// URIs on Android, unlink directly.
-                return RNFS.unlink(fileUri);
-              });
-
-              await Promise.all(deletePromises);
-
-              // Update UI by removing the deleted items from the state
-              const selectedUris = new Set(
-                selectedItems.map(item => item.image.uri),
+              const urisToDelete = Array.from(selectedItems.values()).map(
+                item => item.image.uri,
               );
-              setMedia(prevMedia =>
-                prevMedia.filter(
-                  item => !selectedUris.has(item.node.image.uri),
-                ),
-              );
+
+              await CameraRoll.deletePhotos(urisToDelete);
 
               Alert.alert(
                 'Success',
-                `${selectedItems.length} file(s) deleted.`,
+                `${selectedItems.size} file(s) have been deleted.`,
               );
+
+              // Fully refresh the local media list to reflect the changes
               cancelSelection();
+              loadMedia(); // This will fetch the updated list from the device
             } catch (error) {
               console.error('Failed to delete local files:', error);
               Alert.alert('Error', 'Could not delete one or more files.');
@@ -563,14 +688,27 @@ const GalleryScreen = ({ navigation }) => {
     if (Platform.OS === 'android' && !(await hasAndroidPermission())) {
       return;
     }
+    setLoadingMore(true); // Show loading indicator
     CameraRoll.getPhotos({
-      first: 21,
+      first: 200, // Fetch a larger, single batch of recent photos
       assetType: 'All',
       after,
     })
       .then(r => {
-        setMedia(prevMedia => (after ? [...prevMedia, ...r.edges] : r.edges));
-        setPageInfo(r.page_info);
+        // De-duplicate the list based on the URI to prevent selection issues
+        const seenUris = new Set();
+        const uniqueMedia = r.edges.filter(item => {
+          const uri = item.node.image.uri;
+          return seenUris.has(uri) ? false : seenUris.add(uri);
+        });
+
+        setMedia(uniqueMedia);
+
+        const grouped = groupMediaByDateAndRow(
+          uniqueMedia,
+          item => item.node.timestamp * 1000,
+        );
+        setGroupedLocalMedia(grouped);
       })
       .catch(err => console.log(err))
       .finally(() => setLoadingMore(false));
@@ -578,7 +716,6 @@ const GalleryScreen = ({ navigation }) => {
 
   useEffect(() => {
     if (activeTab === 'local') {
-      // Load local media if it hasn't been loaded yet
       if (media.length === 0) {
         loadMedia();
       }
@@ -589,10 +726,7 @@ const GalleryScreen = ({ navigation }) => {
   }, [activeTab]);
 
   const loadMoreMedia = () => {
-    if (pageInfo?.has_next_page && !loadingMore) {
-      setLoadingMore(true);
-      loadMedia(pageInfo.end_cursor);
-    }
+    // Pagination is disabled in this simplified version.
   };
 
   const handleLongPress = item => {
@@ -600,19 +734,20 @@ const GalleryScreen = ({ navigation }) => {
     if (isSelectionMode) return;
 
     setIsSelectionMode(true);
-    setSelectedItems([item.node]);
+    setSelectedItems(new Map([[item.node.image.uri, item.node]]));
   };
 
   const handlePress = item => {
     const node = item.node;
     const uri = node.image.uri;
     if (isSelectionMode) {
-      const isCurrentlySelected = selectedItems.some(i => i.image.uri === uri);
-      const newSelectedItems = isCurrentlySelected
-        ? selectedItems.filter(i => i.image.uri !== uri)
-        : [...selectedItems, node];
-
-      if (newSelectedItems.length === 0) {
+      const newSelectedItems = new Map(selectedItems);
+      if (newSelectedItems.has(uri)) {
+        newSelectedItems.delete(uri);
+      } else {
+        newSelectedItems.set(uri, node);
+      }
+      if (newSelectedItems.size === 0) {
         setIsSelectionMode(false);
       }
       setSelectedItems(newSelectedItems);
@@ -632,17 +767,17 @@ const GalleryScreen = ({ navigation }) => {
 
   const cancelSelection = () => {
     setIsSelectionMode(false);
-    setSelectedItems([]);
+    setSelectedItems(new Map());
   };
 
   const handleUpload = () => {
-    if (selectedItems.length === 0) {
+    if (selectedItems.size === 0) {
       Alert.alert('No Files Selected', 'Please select files to upload.');
       return;
     }
 
-    // Hand off the files to the upload manager
-    addFilesToUploadQueue(selectedItems);
+    const filesToUpload = Array.from(selectedItems.values());
+    addFilesToUploadQueue(filesToUpload);
 
     // Immediately reset the UI. The UploadManager will show a notification.
     setCloudMedia([]); // Invalidate cloud media to force a refresh on next visit
@@ -654,7 +789,7 @@ const GalleryScreen = ({ navigation }) => {
       {isSelectionMode ? (
         <SelectionHeader
           onCancel={cancelSelection}
-          selectedCount={selectedItems.length}
+          selectedCount={selectedItems.size}
           onUpload={handleUpload}
           onDelete={handleDelete}
           onDownload={handleDownload}
@@ -662,45 +797,60 @@ const GalleryScreen = ({ navigation }) => {
           activeTab={activeTab}
         />
       ) : (
-        <Header navigation={navigation} />
+        <Header
+          navigation={navigation}
+          activeTab={activeTab}
+          onClean={handleCleanDuplicates}
+        />
       )}
       {activeTab === 'local' && (
-        <FlatList
-          data={media}
-          numColumns={3}
+        <SectionList
+          sections={groupedLocalMedia}
           contentContainerStyle={styles.listContentContainer}
-          keyExtractor={item => item.node.image.uri}
-          renderItem={({ item }) => {
-            const isVideo = item.node.type.startsWith('video');
-            const uri = item.node.image.uri;
-            const isSelected = selectedItems.some(i => i.image.uri === uri);
+          keyExtractor={(item, index) => {
+            // The item is an array of photos for the section. Use the first image's URI as a key.
+            if (Array.isArray(item) && item.length > 0) {
+              return item[0].node.image.uri;
+            }
+            return `section-${index}`; // Fallback key
+          }}
+          renderSectionHeader={({ section: { title } }) => (
+            <Text style={styles.sectionHeader}>{title}</Text>
+          )}
+          renderItem={({ item: sectionItems }) => {
+            // 'sectionItems' is an array of all photos for this section
             return (
-              <TouchableOpacity
-                style={styles.imageTouchable}
-                onPress={() => handlePress(item)}
-                onLongPress={() => handleLongPress(item)}
-              >
-                <SharedElement
-                  id={`photo.${item.node.image.uri}`}
-                  style={{ flex: 1 }}
-                >
-                  <Image style={styles.image} source={{ uri: uri }} />
-                </SharedElement>
-                {isSelected && (
-                  <View style={styles.selectionOverlay}>
-                    <Check color="white" size={24} />
-                  </View>
-                )}
-                {isVideo && (
-                  <View style={styles.videoIconContainer}>
-                    <Play color="white" size={24} />
-                  </View>
-                )}
-              </TouchableOpacity>
+              <View style={styles.sectionContainer}>
+                {sectionItems.map(item => {
+                  const isVideo = item.node.type.startsWith('video');
+                  const { uri } = item.node.image;
+                  const isSelected = selectedItems.has(uri);
+                  return (
+                    <TouchableOpacity
+                      key={uri}
+                      style={styles.imageTouchable}
+                      onPress={() => handlePress(item)}
+                      onLongPress={() => handleLongPress(item)}
+                    >
+                      <SharedElement id={`photo.${uri}`} style={{ flex: 1 }}>
+                        <Image style={styles.image} source={{ uri }} />
+                      </SharedElement>
+                      {isSelected && (
+                        <View style={styles.selectionOverlay}>
+                          <Check color="white" size={24} />
+                        </View>
+                      )}
+                      {isVideo && (
+                        <View style={styles.videoIconContainer}>
+                          <Play color="white" size={24} />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             );
           }}
-          onEndReached={loadMoreMedia}
-          onEndReachedThreshold={0.5}
           ListFooterComponent={
             loadingMore && <ActivityIndicator color="#362419" />
           }
@@ -712,53 +862,68 @@ const GalleryScreen = ({ navigation }) => {
             <ActivityIndicator size="large" color="#362419" />
           </View>
         ) : (
-          <FlatList
-            data={cloudMedia}
-            numColumns={3}
+          <SectionList
+            sections={groupedCloudMedia}
             contentContainerStyle={styles.listContentContainer}
-            keyExtractor={item => item._id}
+            keyExtractor={(item, index) => {
+              // The item is an array of photos for the section. Use the first image's ID as a key.
+              if (Array.isArray(item) && item.length > 0) {
+                return item[0]._id;
+              }
+              return `cloud-section-${index}`; // Fallback key
+            }}
+            renderSectionHeader={({ section: { title } }) => (
+              <Text style={styles.sectionHeader}>{title}</Text>
+            )}
             renderItem={({ item }) => {
-              const isVideo = item.mediaType.startsWith('video');
-              const isPhoto = item.mediaType === 'photo';
-              const isSelected = selectedItems.some(i => i._id === item._id);
+              // 'item' is an array of all cloud photos for this section
               return (
-                <TouchableOpacity
-                  style={styles.imageTouchable}
-                  onPress={() => handleCloudItemInteraction(item)}
-                  onLongPress={() => handleCloudItemLongPress(item)}
-                >
-                  <SharedElement
-                    id={`photo.${item.urls.original}`}
-                    style={{ flex: 1 }}
-                  >
-                    {item.localThumbnailPath ? (
-                      <Image
-                        style={styles.image}
-                        source={{ uri: item.localThumbnailPath }}
-                      />
-                    ) : (
-                      // Render a placeholder if no thumbnail is available
-                      <View style={styles.thumbnailPlaceholder}>
-                        <Play color="rgba(255,255,255,0.7)" size={40} />
-                      </View>
-                    )}
-                  </SharedElement>
-                  {isSelected && (
-                    <View style={styles.selectionOverlay}>
-                      <Check color="white" size={24} />
-                    </View>
-                  )}
-                  {isVideo && (
-                    <View style={styles.videoIconContainer}>
-                      <Play color="white" size={24} />
-                    </View>
-                  )}
-                  {!isPhoto && !isVideo && (
-                    <View style={styles.videoIconContainer}>
-                      <File color="white" size={24} />
-                    </View>
-                  )}
-                </TouchableOpacity>
+                <View style={styles.sectionContainer}>
+                  {item.map(mediaItem => {
+                    const isVideo = mediaItem.mediaType.startsWith('video');
+                    const isPhoto = mediaItem.mediaType === 'photo';
+                    const isSelected = selectedItems.has(mediaItem._id);
+                    return (
+                      <TouchableOpacity
+                        key={mediaItem._id}
+                        style={styles.imageTouchable}
+                        onPress={() => handleCloudItemInteraction(mediaItem)}
+                        onLongPress={() => handleCloudItemLongPress(mediaItem)}
+                      >
+                        <SharedElement
+                          id={`photo.${mediaItem.urls.original}`}
+                          style={{ flex: 1 }}
+                        >
+                          {mediaItem.localThumbnailPath ? (
+                            <Image
+                              style={styles.image}
+                              source={{ uri: mediaItem.localThumbnailPath }}
+                            />
+                          ) : (
+                            <View style={styles.thumbnailPlaceholder}>
+                              <Play color="rgba(255,255,255,0.7)" size={40} />
+                            </View>
+                          )}
+                        </SharedElement>
+                        {isSelected && (
+                          <View style={styles.selectionOverlay}>
+                            <Check color="white" size={24} />
+                          </View>
+                        )}
+                        {isVideo && (
+                          <View style={styles.videoIconContainer}>
+                            <Play color="white" size={24} />
+                          </View>
+                        )}
+                        {!isPhoto && !isVideo && (
+                          <View style={styles.videoIconContainer}>
+                            <File color="white" size={24} />
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               );
             }}
           />
@@ -834,6 +999,22 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   imageTouchable: {
+    width: '33.333%',
+    aspectRatio: 1,
+    padding: 2,
+  },
+  sectionContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  sectionHeader: {
+    padding: 16,
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#362419',
+    backgroundColor: '#E8E0D4',
+  },
+  imageTouchable_legacy_flatlist: {
     flex: 1 / 3,
     aspectRatio: 1,
     // This padding creates the visual gap between images.

@@ -3,6 +3,7 @@ import notifee, { AndroidImportance } from '@notifee/react-native';
 import { getAuth } from '@react-native-firebase/auth';
 import RNFB from 'react-native-blob-util';
 import RNFS from 'react-native-fs';
+import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import uuid from 'react-native-uuid';
 
 // --- Global State for the Upload Queue ---
@@ -136,6 +137,27 @@ const getAuthToken = async () => {
   }
 };
 
+/**
+ * Deletes a local file from the device's gallery after it has been uploaded.
+ * @param {string} fileUri The URI of the local file to delete.
+ */
+const deleteLocalFile = async fileUri => {
+  try {
+    // The CameraRoll.deletePhotos method is the correct way to delete media
+    // from the device's gallery, as it handles both the file deletion and
+    // updating the Android MediaStore or iOS Photos library.
+    await CameraRoll.deletePhotos([fileUri]);
+    console.log(`[UploadManager] Successfully deleted local file: ${fileUri}`);
+  } catch (error) {
+    console.error(
+      `[UploadManager] Failed to delete local file ${fileUri}:`,
+      error,
+    );
+    // We log the error but don't re-throw. The upload was successful,
+    // so failing to delete the local file shouldn't be treated as a critical failure.
+  }
+};
+
 const processFile = async (itemNode, originalIndex) => {
   try {
     const fileUri = itemNode.image.uri;
@@ -216,9 +238,13 @@ const uploadSingleFile = async (
 
     if (resp.info().status >= 200 && resp.info().status < 300) {
       const result = resp.json();
-      if (result.status === 'uploaded') successfulUploads.push(filename);
-      else if (result.status === 'duplicate') duplicateUploads.push(filename);
-      else failedUploads.push(filename);
+      if (result.status === 'uploaded') {
+        successfulUploads.push(filename);
+        await deleteLocalFile(fileUri); // Delete after successful upload
+      } else if (result.status === 'duplicate') {
+        duplicateUploads.push(filename);
+        await deleteLocalFile(fileUri); // Also delete if it's a duplicate
+      } else failedUploads.push(filename);
     } else {
       throw new Error(`Server returned status ${resp.info().status}`);
     }
@@ -330,9 +356,13 @@ const uploadFileInChunks = async (
     }
 
     const result = await completeResponse.json();
-    if (result.status === 'uploaded') successfulUploads.push(filename);
-    else if (result.status === 'duplicate') duplicateUploads.push(filename);
-    else failedUploads.push(filename);
+    if (result.status === 'uploaded') {
+      successfulUploads.push(filename);
+      await deleteLocalFile(fileUri); // Delete after successful upload
+    } else if (result.status === 'duplicate') {
+      duplicateUploads.push(filename);
+      await deleteLocalFile(fileUri); // Also delete if it's a duplicate
+    } else failedUploads.push(filename);
   } catch (error) {
     // Add more context to the error before re-throwing
     throw new Error(
@@ -380,24 +410,26 @@ const processQueue = async () => {
 export const addFilesToUploadQueue = async files => {
   if (files.length === 0) return;
 
-  const filesWithIndex = files.map((file, index) => ({
-    itemNode: file,
-    originalIndex: completedFilesInSession + uploadQueue.length + index,
-  }));
-
   if (uploadQueue.length === 0 && !isProcessing) {
-    totalFilesInSession = filesWithIndex.length;
+    totalFilesInSession = files.length;
     completedFilesInSession = 0;
     successfulUploads = [];
     duplicateUploads = [];
     failedUploads = [];
     await showUploadNotification(totalFilesInSession);
   } else {
-    totalFilesInSession += filesWithIndex.length;
+    totalFilesInSession += files.length;
     await showUploadNotification(totalFilesInSession);
   }
 
-  uploadQueue.push(...filesWithIndex);
+  // The 'file' objects from GalleryScreen are already the 'node' objects we need.
+  // We just need to wrap them for the queue with their original index.
+  const itemsToQueue = files.map((node, index) => ({
+    itemNode: node,
+    originalIndex: completedFilesInSession + uploadQueue.length + index,
+  }));
+
+  uploadQueue.push(...itemsToQueue);
 
   if (!isProcessing) {
     processQueue();
