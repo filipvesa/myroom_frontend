@@ -3,8 +3,8 @@ import {
   View,
   Text,
   StyleSheet,
-  SectionList,
   FlatList,
+  SectionList,
   TouchableOpacity,
   Image,
   Platform,
@@ -34,6 +34,7 @@ import {
 import { addFilesToUploadQueue } from '../services/UploadManager';
 import { getAuth } from '@react-native-firebase/auth';
 import RNFS from 'react-native-fs';
+import RNFB from 'react-native-blob-util';
 
 const Header = ({ navigation, onClean, activeTab }) => (
   <View style={styles.header}>
@@ -49,14 +50,7 @@ const Header = ({ navigation, onClean, activeTab }) => (
         <Text style={styles.proBadgeText}>PRO</Text>
       </View>
     </View>
-    {/* Show the clean button only on the local tab */}
-    {activeTab === 'local' ? (
-      <TouchableOpacity style={styles.headerButton} onPress={onClean}>
-        <Wrench color="black" size={24} />
-      </TouchableOpacity>
-    ) : (
-      <View style={{ width: 40 }} />
-    )}
+    <View style={{ width: 40 }} />
   </View>
 );
 
@@ -148,6 +142,80 @@ const BottomNavigation = ({ activeTab, onTabPress }) => {
   );
 };
 
+// Memoizing the individual grid items is a key performance optimization.
+// It prevents them from re-rendering unnecessarily as the list scrolls.
+const MemoizedLocalMediaItem = React.memo(
+  ({ item, onLongPress, onPress, isSelected }) => {
+    const isVideo = item.node.type.startsWith('video');
+    const { uri } = item.node.image;
+
+    return (
+      <TouchableOpacity
+        style={styles.imageTouchable}
+        onPress={() => onPress(item)}
+        onLongPress={() => onLongPress(item)}
+      >
+        <SharedElement id={`photo.${uri}`} style={{ flex: 1 }}>
+          <Image style={styles.image} source={{ uri }} />
+        </SharedElement>
+        {isSelected && (
+          <View style={styles.selectionOverlay}>
+            <Check color="white" size={24} />
+          </View>
+        )}
+        {isVideo && (
+          <View style={styles.videoIconContainer}>
+            <Play color="white" size={24} />
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  },
+);
+
+const MemoizedCloudMediaItem = React.memo(
+  ({ item, onLongPress, isSelected, handleCloudItemInteraction }) => {
+    const isVideo = item.mediaType.startsWith('video');
+    const isPhoto = item.mediaType === 'photo';
+
+    return (
+      <TouchableOpacity
+        style={styles.imageTouchable}
+        onPress={() => handleCloudItemInteraction(item)} // Use the passed handler
+        onLongPress={() => onLongPress(item)}
+      >
+        <SharedElement id={`photo.${item.urls.original}`} style={{ flex: 1 }}>
+          {item.localThumbnailPath ? (
+            <Image
+              style={styles.image}
+              source={{ uri: item.localThumbnailPath }}
+            />
+          ) : (
+            <View style={styles.thumbnailPlaceholder}>
+              <Play color="rgba(255,255,255,0.7)" size={40} />
+            </View>
+          )}
+        </SharedElement>
+        {isSelected && (
+          <View style={styles.selectionOverlay}>
+            <Check color="white" size={24} />
+          </View>
+        )}
+        {isVideo && (
+          <View style={styles.videoIconContainer}>
+            <Play color="white" size={24} />
+          </View>
+        )}
+        {!isPhoto && !isVideo && (
+          <View style={styles.videoIconContainer}>
+            <File color="white" size={24} />
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  },
+);
+
 const groupMediaByDateAndRow = (mediaList, dateExtractor) => {
   if (!mediaList || mediaList.length === 0) return [];
 
@@ -182,13 +250,20 @@ const groupMediaByDateAndRow = (mediaList, dateExtractor) => {
 const GalleryScreen = ({ navigation }) => {
   const [activeTab, setActiveTab] = useState('local');
   const [media, setMedia] = useState([]);
+  const [pageInfo, setPageInfo] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [cloudMedia, setCloudMedia] = useState([]);
   const [groupedLocalMedia, setGroupedLocalMedia] = useState([]);
-  const [loadingCloud, setLoadingCloud] = useState(false);
   const [groupedCloudMedia, setGroupedCloudMedia] = useState([]);
   const [selectedItems, setSelectedItems] = useState(new Map());
+  const [flatCloudMedia, setFlatCloudMedia] = useState([]);
+
+  // State for cloud media pagination
+  const [loadingCloud, setLoadingCloud] = useState(false); // For initial load
+  const [loadingMoreCloud, setLoadingMoreCloud] = useState(false);
+  const [cloudPage, setCloudPage] = useState(1);
+  const [hasMoreCloud, setHasMoreCloud] = useState(true);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -199,50 +274,49 @@ const GalleryScreen = ({ navigation }) => {
   );
 
   async function hasAndroidPermission() {
-    const getCheckPermissionPromise = () => {
-      if (Platform.Version >= 33) {
-        return Promise.all([
-          PermissionsAndroid.check(
-            PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
-          ),
-          PermissionsAndroid.check(
-            PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
-          ),
-        ]).then(
-          ([hasReadMediaImagesPermission, hasReadMediaVideoPermission]) =>
-            hasReadMediaImagesPermission && hasReadMediaVideoPermission,
-        );
-      } else {
-        return PermissionsAndroid.check(
-          PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-        );
-      }
-    };
-
-    const hasPermission = await getCheckPermissionPromise();
-    if (hasPermission) {
+    if (Platform.OS !== 'android') {
       return true;
     }
-    const getRequestPermissionPromise = () => {
-      if (Platform.Version >= 33) {
-        return PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
-        ]).then(
-          statuses =>
-            statuses[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] ===
-              PermissionsAndroid.RESULTS.GRANTED &&
-            statuses[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] ===
-              PermissionsAndroid.RESULTS.GRANTED,
-        );
-      } else {
-        return PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-        ).then(status => status === PermissionsAndroid.RESULTS.GRANTED);
-      }
-    };
 
-    return await getRequestPermissionPromise();
+    let hasPermission = false;
+    if (Platform.Version >= 33) {
+      // On Android 13+, we need to check for granular media permissions.
+      const statuses = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
+      ]);
+      hasPermission =
+        statuses[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] ===
+          PermissionsAndroid.RESULTS.GRANTED &&
+        statuses[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] ===
+          PermissionsAndroid.RESULTS.GRANTED;
+    } else {
+      // On older Android versions (API 28 and below), we need WRITE_EXTERNAL_STORAGE
+      // to be able to delete files from the gallery.
+      const readResult = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+      );
+      // We also need write permission for deletion to work.
+      const writeResult = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+      );
+      hasPermission =
+        readResult === PermissionsAndroid.RESULTS.GRANTED &&
+        writeResult === PermissionsAndroid.RESULTS.GRANTED;
+    }
+
+    if (!hasPermission) {
+      Alert.alert(
+        'Permission Required',
+        'MyRoom needs access to your photos and videos to display them. Please grant permission in your device settings.',
+        [
+          { text: 'Not Now', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+        ],
+      );
+    }
+
+    return hasPermission;
   }
 
   // In a real app, you would retrieve this from secure storage after a login process.
@@ -256,9 +330,15 @@ const GalleryScreen = ({ navigation }) => {
     }
   };
 
-  const loadCloudMedia = async () => {
-    setLoadingCloud(true);
+  const loadCloudMedia = async (page = 1) => {
+    if (page === 1) {
+      setLoadingCloud(true);
+    } else {
+      setLoadingMoreCloud(true);
+    }
+
     try {
+      const PAGE_LIMIT = 30;
       const token = await getAuthToken();
       // Critical Check: If there's no token, the user is not authenticated.
       if (!token) {
@@ -274,9 +354,12 @@ const GalleryScreen = ({ navigation }) => {
       }
 
       // 1. Fetch the latest list of media from the server
-      const response = await fetch('https://vesafilip.eu/api/media/', {
-        headers,
-      });
+      const response = await fetch(
+        `https://vesafilip.eu/api/media/?page=${page}&limit=${PAGE_LIMIT}`,
+        {
+          headers,
+        },
+      );
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -362,14 +445,42 @@ const GalleryScreen = ({ navigation }) => {
         // Optionally, show a specific alert here
       }
 
+      // Append new media if it's not the first page
+      const newCloudMedia =
+        page === 1 ? processedMedia : [...cloudMedia, ...processedMedia];
+
+      // Update state
+      setCloudMedia(newCloudMedia);
+      setCloudPage(page);
+      setHasMoreCloud(processedMedia.length === PAGE_LIMIT);
+
+      // Group the successfully processed media by date *after* filtering
       // Group the successfully processed media by date
       const grouped = groupMediaByDateAndRow(
-        processedMedia,
+        newCloudMedia,
         item => item.createdAt,
       );
-
-      setCloudMedia(processedMedia);
       setGroupedCloudMedia(grouped);
+
+      // Create a flat list for performant rendering with FlatList
+      const flatData = [];
+      grouped.forEach(section => {
+        if (section.data[0] && section.data[0].length > 0) {
+          flatData.push({
+            id: `header-${section.title}`,
+            type: 'header',
+            title: section.title,
+          });
+          section.data[0].forEach(photo => {
+            flatData.push({
+              ...photo,
+              id: `photo-${photo._id}`,
+              type: 'photo',
+            });
+          });
+        }
+      });
+      setFlatCloudMedia(flatData);
     } catch (error) {
       console.error('Failed to fetch cloud media:', error);
       Alert.alert(
@@ -379,6 +490,7 @@ const GalleryScreen = ({ navigation }) => {
       );
     } finally {
       setLoadingCloud(false);
+      setLoadingMoreCloud(false);
     }
   };
 
@@ -388,7 +500,8 @@ const GalleryScreen = ({ navigation }) => {
 
     if (item.mediaType === 'photo') {
       navigation.navigate('PhotoView', {
-        photoUri: item.urls.original,
+        optimizedUri: item.urls.medium, // Use 'medium' as the optimized version
+        originalUri: item.urls.original, // Use the full URL provided by the backend
         thumbnailUri: item.localThumbnailPath, // Pass the local thumbnail
         headers: headers,
       });
@@ -479,66 +592,65 @@ const GalleryScreen = ({ navigation }) => {
           style: 'default',
           onPress: async () => {
             try {
+              const downloadsDir = RNFS.DownloadDirectoryPath;
+              const myRoomDir = `${downloadsDir}/MyRoom`;
+              await RNFS.mkdir(myRoomDir);
+
               const token = await getAuthToken();
               const headers = {};
               if (token) {
                 headers['Authorization'] = `Bearer ${token}`;
               }
 
-              const downloadAndSavePromises = Array.from(
-                selectedItems.values(),
-              ).map(async item => {
-                const downloadUrl = `https://vesafilip.eu/api/media/download/${item._id}/${item.size}`;
-                // Use a temporary path in the cache for the initial download
-                const tempPath = `${RNFS.CachesDirectoryPath}/${item.filename}`;
+              const downloadPromises = Array.from(selectedItems.values()).map(
+                async item => {
+                  // Construct a valid filename since it's not in the item object
+                  let extension = 'file';
+                  let mimeType = 'application/octet-stream';
+                  if (item.mimeType) {
+                    extension = item.mimeType.split('/')[1];
+                    mimeType = item.mimeType;
+                  } else if (item.mediaType === 'photo') {
+                    extension = 'jpg';
+                    mimeType = 'image/jpeg';
+                  } else if (item.mediaType === 'video') {
+                    extension = 'mp4';
+                    mimeType = 'video/mp4';
+                  }
+                  const filename = `${item._id}.${extension}`;
+                  const downloadUrl = `https://vesafilip.eu/api/media/download/${item._id}/original`;
+                  const finalPath = `${myRoomDir}/${filename}`;
 
-                console.log(
-                  `[Download] Starting download for ${item.filename} to ${tempPath}`,
-                );
-
-                const downloadResult = await RNFS.downloadFile({
-                  fromUrl: downloadUrl,
-                  toFile: tempPath,
-                  headers: headers,
-                }).promise;
-
-                console.log(
-                  `[Download] Completed for ${item.filename}. Status: ${downloadResult.statusCode}`,
-                );
-
-                if (downloadResult.statusCode !== 200) {
-                  throw new Error(
-                    `Download failed for ${item.filename} with status ${downloadResult.statusCode}`,
-                  );
-                }
-
-                // For photos and videos, save them to the gallery to make them visible
-                if (
-                  item.mediaType === 'photo' ||
-                  item.mediaType.startsWith('video')
-                ) {
                   console.log(
-                    `[Download] Saving ${item.filename} to device gallery.`,
+                    `[Download] Starting download for ${filename} to ${finalPath}`,
                   );
-                  await CameraRoll.save(tempPath, {
-                    type: item.mediaType,
-                    album: 'MyRoom',
-                  });
-                }
-                // For other file types, we can move them to the public Downloads folder
-                else {
-                  const finalPath = `${RNFS.DownloadDirectoryPath}/${item.filename}`;
-                  await RNFS.moveFile(tempPath, finalPath);
-                }
-              });
 
-              await Promise.all(downloadAndSavePromises);
+                  const res = await RNFS.downloadFile({
+                    fromUrl: downloadUrl,
+                    toFile: finalPath,
+                    headers: headers,
+                  }).promise;
+
+                  if (res.statusCode !== 200) {
+                    throw new Error(
+                      `Download failed for ${filename} with status ${res.statusCode}`,
+                    );
+                  }
+
+                  // After download, scan the file to make it visible in the gallery
+                  await RNFB.fs.scanFile([{ path: finalPath, mime: mimeType }]);
+                  console.log(
+                    `[Download] Scanned ${filename} (Status: ${res.statusCode})`,
+                  );
+                },
+              );
+
+              await Promise.all(downloadPromises);
 
               Alert.alert(
                 'Download Complete',
-                `${selectedItems.size} file(s) have been saved to your device.`,
+                `${selectedItems.size} file(s) have been saved to your "Downloads/MyRoom" folder.`,
               );
-              loadMedia(); // Refresh the local media list
             } catch (error) {
               console.error('Failed to download files:', error);
               Alert.alert(
@@ -547,99 +659,6 @@ const GalleryScreen = ({ navigation }) => {
               );
             } finally {
               cancelSelection();
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const handleCleanDuplicates = async () => {
-    Alert.alert(
-      'Clean Local Duplicates',
-      'This will check all local files against cloud storage and delete any that are already backed up. This action cannot be undone. Continue?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Continue',
-          onPress: async () => {
-            setLoadingCloud(true); // Reuse the main loading indicator
-            try {
-              // 1. Fetch all cloud media filenames into a Set for fast lookups
-              console.log('[Clean] Fetching cloud media list...');
-              const token = await getAuthToken();
-              if (!token) throw new Error('Not authenticated');
-              const response = await fetch('https://vesafilip.eu/api/media/', {
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              if (!response.ok) {
-                throw new Error('Failed to fetch cloud media list.');
-              }
-              const cloudMediaList = await response.json();
-              const cloudFilenames = new Set(
-                cloudMediaList.map(item => item.filename),
-              );
-
-              if (cloudFilenames.size === 0) {
-                Alert.alert(
-                  'Info',
-                  'No media found in cloud storage. Nothing to clean.',
-                );
-                return;
-              }
-              console.log(
-                `[Clean] Found ${cloudFilenames.size} files in the cloud.`,
-              );
-
-              // 2. Fetch all local media recursively
-              console.log('[Clean] Fetching all local media...');
-              let allLocalMedia = [];
-              let hasNextPage = true;
-              let after = undefined;
-              while (hasNextPage) {
-                const result = await CameraRoll.getPhotos({
-                  first: 1000,
-                  assetType: 'All',
-                  after,
-                });
-                allLocalMedia.push(...result.edges);
-                hasNextPage = result.page_info.has_next_page;
-                after = result.page_info.end_cursor;
-              }
-              console.log(
-                `[Clean] Found ${allLocalMedia.length} total local files.`,
-              );
-
-              // 3. Identify and delete duplicates
-              const duplicatesToDelete = allLocalMedia.filter(localItem =>
-                cloudFilenames.has(localItem.node.image.filename),
-              );
-
-              if (duplicatesToDelete.length === 0) {
-                Alert.alert('All Clean!', 'No duplicate files were found.');
-                return;
-              }
-
-              const urisToDelete = duplicatesToDelete.map(
-                item => item.node.image.uri,
-              );
-              await CameraRoll.deletePhotos(urisToDelete);
-
-              Alert.alert(
-                'Cleanup Complete',
-                `Successfully deleted ${duplicatesToDelete.length} duplicate file(s) from your device.`,
-              );
-
-              // 4. Refresh the local media list in the UI
-              loadMedia();
-            } catch (error) {
-              console.error('[Clean] Cleanup failed:', error);
-              Alert.alert(
-                'Error',
-                'The cleanup process failed. Please try again.',
-              );
-            } finally {
-              setLoadingCloud(false);
             }
           },
         },
@@ -690,19 +709,24 @@ const GalleryScreen = ({ navigation }) => {
     }
     setLoadingMore(true); // Show loading indicator
     CameraRoll.getPhotos({
-      first: 200, // Fetch a larger, single batch of recent photos
+      first: 42, // Fetch a reasonable page size
       assetType: 'All',
       after,
     })
       .then(r => {
+        const incomingMedia = r.edges;
+        const currentMedia = after ? media : [];
+        const combinedMedia = [...currentMedia, ...incomingMedia];
+
         // De-duplicate the list based on the URI to prevent selection issues
         const seenUris = new Set();
-        const uniqueMedia = r.edges.filter(item => {
+        const uniqueMedia = combinedMedia.filter(item => {
           const uri = item.node.image.uri;
           return seenUris.has(uri) ? false : seenUris.add(uri);
         });
 
         setMedia(uniqueMedia);
+        setPageInfo(r.page_info);
 
         const grouped = groupMediaByDateAndRow(
           uniqueMedia,
@@ -721,12 +745,25 @@ const GalleryScreen = ({ navigation }) => {
       }
     } else if (activeTab === 'storage') {
       // Always refresh cloud media when the storage tab is active
-      loadCloudMedia();
+      // Reset and load the first page
+      setCloudMedia([]);
+      setGroupedCloudMedia([]);
+      setCloudPage(1);
+      setHasMoreCloud(true);
+      loadCloudMedia(1);
     }
   }, [activeTab]);
 
   const loadMoreMedia = () => {
-    // Pagination is disabled in this simplified version.
+    if (pageInfo?.has_next_page && !loadingMore) {
+      loadMedia(pageInfo.end_cursor);
+    }
+  };
+
+  const loadMoreCloudMedia = () => {
+    if (hasMoreCloud && !loadingMoreCloud && !loadingCloud) {
+      loadCloudMedia(cloudPage + 1);
+    }
   };
 
   const handleLongPress = item => {
@@ -756,7 +793,11 @@ const GalleryScreen = ({ navigation }) => {
       const isVideo = item.node.type.startsWith('video');
       if (!isVideo) {
         navigation.navigate('PhotoView', {
-          photoUri: uri,
+          // For local files, all URIs are the same.
+          optimizedUri: uri,
+          originalUri: uri,
+          thumbnailUri: uri,
+          headers: {}, // No headers needed for local files
         });
       } else {
         // Use the new in-app player for local videos as well
@@ -780,7 +821,11 @@ const GalleryScreen = ({ navigation }) => {
     addFilesToUploadQueue(filesToUpload);
 
     // Immediately reset the UI. The UploadManager will show a notification.
-    setCloudMedia([]); // Invalidate cloud media to force a refresh on next visit
+    // Invalidate cloud media to force a refresh on next visit
+    setCloudMedia([]);
+    setGroupedCloudMedia([]);
+    setCloudPage(1);
+    setHasMoreCloud(true);
     cancelSelection();
   };
 
@@ -797,20 +842,17 @@ const GalleryScreen = ({ navigation }) => {
           activeTab={activeTab}
         />
       ) : (
-        <Header
-          navigation={navigation}
-          activeTab={activeTab}
-          onClean={handleCleanDuplicates}
-        />
+        <Header navigation={navigation} activeTab={activeTab} />
       )}
       {activeTab === 'local' && (
         <SectionList
           sections={groupedLocalMedia}
           contentContainerStyle={styles.listContentContainer}
-          keyExtractor={(item, index) => {
-            // The item is an array of photos for the section. Use the first image's URI as a key.
-            if (Array.isArray(item) && item.length > 0) {
-              return item[0].node.image.uri;
+          keyExtractor={(sectionItems, index) => {
+            // The item passed to keyExtractor is the array of photos for the section.
+            // Use the first image's URI as a key.
+            if (Array.isArray(sectionItems) && sectionItems.length > 0) {
+              return sectionItems[0].node.image.uri;
             }
             return `section-${index}`; // Fallback key
           }}
@@ -821,113 +863,63 @@ const GalleryScreen = ({ navigation }) => {
             // 'sectionItems' is an array of all photos for this section
             return (
               <View style={styles.sectionContainer}>
-                {sectionItems.map(item => {
-                  const isVideo = item.node.type.startsWith('video');
-                  const { uri } = item.node.image;
-                  const isSelected = selectedItems.has(uri);
-                  return (
-                    <TouchableOpacity
-                      key={uri}
-                      style={styles.imageTouchable}
-                      onPress={() => handlePress(item)}
-                      onLongPress={() => handleLongPress(item)}
-                    >
-                      <SharedElement id={`photo.${uri}`} style={{ flex: 1 }}>
-                        <Image style={styles.image} source={{ uri }} />
-                      </SharedElement>
-                      {isSelected && (
-                        <View style={styles.selectionOverlay}>
-                          <Check color="white" size={24} />
-                        </View>
-                      )}
-                      {isVideo && (
-                        <View style={styles.videoIconContainer}>
-                          <Play color="white" size={24} />
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
+                {sectionItems.map(item => (
+                  <MemoizedLocalMediaItem
+                    key={item.node.image.uri}
+                    item={item}
+                    onPress={handlePress}
+                    onLongPress={handleLongPress}
+                    isSelected={selectedItems.has(item.node.image.uri)}
+                  />
+                ))}
               </View>
             );
           }}
+          onEndReached={loadMoreMedia}
+          onEndReachedThreshold={0.5}
+          initialNumToRender={12} // Render a few sections initially
+          maxToRenderPerBatch={6} // Render smaller batches
+          windowSize={11} // Keep a reasonable number of sections in memory
           ListFooterComponent={
             loadingMore && <ActivityIndicator color="#362419" />
           }
         />
       )}
-      {activeTab === 'storage' &&
-        (loadingCloud ? (
-          <View style={styles.placeholderContainer}>
-            <ActivityIndicator size="large" color="#362419" />
-          </View>
-        ) : (
-          <SectionList
-            sections={groupedCloudMedia}
-            contentContainerStyle={styles.listContentContainer}
-            keyExtractor={(item, index) => {
-              // The item is an array of photos for the section. Use the first image's ID as a key.
-              if (Array.isArray(item) && item.length > 0) {
-                return item[0]._id;
-              }
-              return `cloud-section-${index}`; // Fallback key
-            }}
-            renderSectionHeader={({ section: { title } }) => (
-              <Text style={styles.sectionHeader}>{title}</Text>
-            )}
-            renderItem={({ item }) => {
-              // 'item' is an array of all cloud photos for this section
+      {activeTab === 'storage' && (
+        <FlatList
+          data={flatCloudMedia}
+          contentContainerStyle={styles.listContentContainer}
+          keyExtractor={item => item.id}
+          numColumns={3}
+          renderItem={({ item }) => {
+            if (item.type === 'header') {
               return (
-                <View style={styles.sectionContainer}>
-                  {item.map(mediaItem => {
-                    const isVideo = mediaItem.mediaType.startsWith('video');
-                    const isPhoto = mediaItem.mediaType === 'photo';
-                    const isSelected = selectedItems.has(mediaItem._id);
-                    return (
-                      <TouchableOpacity
-                        key={mediaItem._id}
-                        style={styles.imageTouchable}
-                        onPress={() => handleCloudItemInteraction(mediaItem)}
-                        onLongPress={() => handleCloudItemLongPress(mediaItem)}
-                      >
-                        <SharedElement
-                          id={`photo.${mediaItem.urls.original}`}
-                          style={{ flex: 1 }}
-                        >
-                          {mediaItem.localThumbnailPath ? (
-                            <Image
-                              style={styles.image}
-                              source={{ uri: mediaItem.localThumbnailPath }}
-                            />
-                          ) : (
-                            <View style={styles.thumbnailPlaceholder}>
-                              <Play color="rgba(255,255,255,0.7)" size={40} />
-                            </View>
-                          )}
-                        </SharedElement>
-                        {isSelected && (
-                          <View style={styles.selectionOverlay}>
-                            <Check color="white" size={24} />
-                          </View>
-                        )}
-                        {isVideo && (
-                          <View style={styles.videoIconContainer}>
-                            <Play color="white" size={24} />
-                          </View>
-                        )}
-                        {!isPhoto && !isVideo && (
-                          <View style={styles.videoIconContainer}>
-                            <File color="white" size={24} />
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
+                <View style={styles.fullWidthContainer}>
+                  <Text style={styles.sectionHeader}>{item.title}</Text>
                 </View>
               );
-            }}
-          />
-        ))}
+            }
+
+            // It's a photo item
+            const isVideo = item.mediaType.startsWith('video');
+            const isPhoto = item.mediaType === 'photo';
+            const isSelected = selectedItems.has(item._id);
+            return (
+              <MemoizedCloudMediaItem
+                item={item}
+                handleCloudItemInteraction={handleCloudItemInteraction}
+                onLongPress={handleCloudItemLongPress}
+                isSelected={isSelected}
+              />
+            );
+          }}
+          onEndReached={loadMoreCloudMedia}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            loadingMoreCloud && <ActivityIndicator color="#362419" />
+          }
+        />
+      )}
       {activeTab !== 'local' && activeTab !== 'storage' && (
         <View style={styles.placeholderContainer}>
           <Text style={styles.placeholderText}>Coming Soon</Text>
@@ -998,6 +990,9 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     opacity: 0.7,
   },
+  fullWidthContainer: {
+    width: '100%',
+  },
   imageTouchable: {
     width: '33.333%',
     aspectRatio: 1,
@@ -1008,11 +1003,11 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   sectionHeader: {
-    padding: 16,
     fontSize: 16,
     fontWeight: 'bold',
     color: '#362419',
     backgroundColor: '#E8E0D4',
+    paddingHorizontal: 16, // Keep horizontal padding
   },
   imageTouchable_legacy_flatlist: {
     flex: 1 / 3,

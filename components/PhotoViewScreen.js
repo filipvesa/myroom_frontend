@@ -7,6 +7,7 @@ import {
   Text,
   StatusBar,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Orientation from 'react-native-orientation-locker';
@@ -16,22 +17,19 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withTiming,
+  runOnJS,
 } from 'react-native-reanimated';
 
 const AnimatedImage = Animated.createAnimatedComponent(Image);
 
 const PhotoViewScreen = ({ route, navigation }) => {
-  const { photoUri, thumbnailUri, headers } = route.params;
+  const { optimizedUri, originalUri, thumbnailUri, headers } = route.params;
   const { width, height } = useWindowDimensions();
 
-  // Start by showing the thumbnail, then switch to the full-res image
+  // Start by showing the thumbnail, then switch to the optimized or original image
   const [imageSource, setImageSource] = useState({ uri: thumbnailUri });
-
-  useEffect(() => {
-    // Once the component mounts, set the source to the high-resolution image.
-    // The thumbnail will be displayed until this one loads.
-    setImageSource({ uri: photoUri, headers: headers });
-  }, [photoUri, headers]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isHd, setIsHd] = useState(false);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -45,6 +43,19 @@ const PhotoViewScreen = ({ route, navigation }) => {
     }, []),
   );
 
+  useFocusEffect(
+    React.useCallback(() => {
+      // Log that the user is viewing this specific photo
+
+      // By setting the high-res source here, we ensure the shared element
+      // transition completes before we try to load the new image.
+      if (optimizedUri) {
+        setImageSource({ uri: optimizedUri, headers: headers });
+      }
+      console.log(`[Observability] User is viewing photo: ${optimizedUri}`);
+    }, [optimizedUri]),
+  );
+
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -52,12 +63,24 @@ const PhotoViewScreen = ({ route, navigation }) => {
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
 
+  // Memoize the goBack function to preserve navigation context. Must be defined *before* the gestures that use it.
+  const goBack = React.useCallback(() => {
+    navigation.goBack();
+  }, [navigation]);
+
   const pinchGesture = Gesture.Pinch()
     .onUpdate(e => {
       scale.value = savedScale.value * e.scale;
     })
     .onEnd(() => {
-      if (scale.value < 1) {
+      'worklet'; // Explicitly mark this as a worklet
+      // Define a threshold for the dismiss gesture
+      const DISMISS_THRESHOLD = 0.6;
+
+      if (scale.value < DISMISS_THRESHOLD) {
+        // Safely call the JS function from the UI thread
+        runOnJS(goBack)();
+      } else if (scale.value < 1) {
         // Animate back to center and 1x scale
         scale.value = withTiming(1);
         savedScale.value = 1;
@@ -121,19 +144,43 @@ const PhotoViewScreen = ({ route, navigation }) => {
     ],
   }));
 
+  const handleHdPress = () => {
+    // Switch to the original, full-resolution image
+    setImageSource({ uri: originalUri, headers: headers });
+    setIsHd(true);
+  };
+
   return (
     <GestureDetector
       gesture={Gesture.Simultaneous(pinchGesture, panGesture, doubleTap)}
     >
       <View style={styles.container}>
         <StatusBar hidden />
-        <SharedElement id={`photo.${photoUri}`} style={StyleSheet.absoluteFill}>
+        <SharedElement
+          id={`photo.${optimizedUri}`}
+          style={StyleSheet.absoluteFill}
+        >
           <AnimatedImage
             source={imageSource}
+            onLoadStart={() => setIsLoading(true)}
+            onLoadEnd={() => setIsLoading(false)}
             style={[styles.image, animatedStyle]}
             resizeMode="contain"
           />
         </SharedElement>
+        {isLoading && (
+          <ActivityIndicator style={styles.loader} size="large" color="white" />
+        )}
+        {!isLoading && originalUri && !isHd && (
+          <TouchableOpacity style={styles.hdButton} onPress={handleHdPress}>
+            <Text style={styles.hdButtonText}>HD</Text>
+          </TouchableOpacity>
+        )}
+        {!isLoading && isHd && (
+          <View style={[styles.hdButton, styles.hdActive]}>
+            <Text style={styles.hdButtonText}>HD</Text>
+          </View>
+        )}
         <TouchableOpacity
           style={styles.closeButton}
           onPress={() => navigation.goBack()}
@@ -156,10 +203,38 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  loader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   closeButton: {
     position: 'absolute',
     top: 60,
     right: 20,
+  },
+  hdButton: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
+  },
+  hdActive: {
+    backgroundColor: 'rgba(0, 122, 255, 0.7)',
+    borderColor: 'rgba(0, 122, 255, 1)',
+  },
+  hdButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
   },
   closeButtonText: {
     color: 'white',

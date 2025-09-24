@@ -60,9 +60,13 @@ export function initializeRemoteLogging() {
     logQueue.push({
       level,
       timestamp: new Date().toISOString(),
-      messages: messages.map(m =>
-        typeof m === 'object' ? JSON.stringify(m, null, 2) : String(m),
-      ),
+      // Improved serialization to handle Error objects correctly
+      messages: messages.map(m => {
+        if (m instanceof Error) {
+          return `Error: ${m.name} - ${m.message}\nStack: ${m.stack}`;
+        }
+        return typeof m === 'object' ? JSON.stringify(m, null, 2) : String(m);
+      }),
     });
 
     if (logQueue.length >= BATCH_SIZE) {

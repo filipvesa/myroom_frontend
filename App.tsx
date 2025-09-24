@@ -18,7 +18,12 @@ export type RootStackParamList = {
   Splash: undefined;
   Main: undefined;
   Gallery: undefined;
-  PhotoView: { photoUri: string };
+  PhotoView: {
+    optimizedUri: string;
+    originalUri: string;
+    thumbnailUri: string;
+    headers: Record<string, string>;
+  };
   VideoPlayer: { videoUri: string };
   Login: undefined;
   SignUp: undefined;
@@ -66,7 +71,7 @@ const MainStack = () => (
           cardStyle: { opacity: progress },
         }),
       }}
-      sharedElements={route => [`photo.${route.params.photoUri}`]}
+      sharedElements={route => [`photo.${route.params.optimizedUri}`]}
     />
     <Stack.Screen
       name="VideoPlayer"

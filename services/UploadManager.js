@@ -163,12 +163,29 @@ const processFile = async (itemNode, originalIndex) => {
     const fileUri = itemNode.image.uri;
     const filename = itemNode.image.filename || `media_${Date.now()}`;
     const mimeType = itemNode.type;
-    const fileStat = await RNFS.stat(fileUri);
+    let fileStat;
+    try {
+      fileStat = await RNFS.stat(fileUri);
+    } catch (statError) {
+      // This is a critical failure, as we can't read the file.
+      // Re-throw a more informative error.
+      throw new Error(
+        `Could not get file stats for URI: ${fileUri}. Original error: ${statError.message}`,
+      );
+    }
     const totalSize = fileStat.size;
 
     const CLOUDFLARE_LIMIT = 95 * 1024 * 1024; // 95MB to be safe
 
-    if (totalSize < CLOUDFLARE_LIMIT) {
+    // Force all videos to use the chunked upload strategy for better reliability
+    // and to avoid server timeouts, regardless of their size.
+    let isVideo = mimeType.startsWith('video/');
+    // Fallback check: if mimeType is generic, check the file extension.
+    if (!isVideo) {
+      const extension = (filename.split('.').pop() || '').toLowerCase();
+      isVideo = ['mp4', 'mov', 'avi', 'mkv'].includes(extension);
+    }
+    if (totalSize < CLOUDFLARE_LIMIT && !isVideo) {
       // --- Strategy 1: Small file, upload in a single request ---
       await uploadSingleFile(
         fileUri,
@@ -192,7 +209,7 @@ const processFile = async (itemNode, originalIndex) => {
     const fallbackFileName =
       itemNode.image.filename || `media_${Date.now()}_${originalIndex}`;
     console.error(
-      `[UploadManager] Critial failure for ${fallbackFileName}:`,
+      `[UploadManager] Critical failure for ${fallbackFileName}:`,
       error,
     );
     failedUploads.push(fallbackFileName);
@@ -237,6 +254,14 @@ const uploadSingleFile = async (
       });
 
     if (resp.info().status >= 200 && resp.info().status < 300) {
+      // Explicitly update progress to 100% for this file to ensure it doesn't get "stuck".
+      await updateUploadProgress(
+        filename,
+        100,
+        null,
+        totalFiles,
+        completedFiles,
+      );
       const result = resp.json();
       if (result.status === 'uploaded') {
         successfulUploads.push(filename);
@@ -355,6 +380,8 @@ const uploadFileInChunks = async (
       throw new Error(`Assembly failed with status ${completeInfo.status}`);
     }
 
+    // Explicitly update progress to 100% for the chunked file upon successful finalization.
+    await updateUploadProgress(filename, 100, null, totalFiles, completedFiles);
     const result = await completeResponse.json();
     if (result.status === 'uploaded') {
       successfulUploads.push(filename);
@@ -372,15 +399,21 @@ const uploadFileInChunks = async (
 };
 
 const processQueue = async () => {
-  if (isProcessing || uploadQueue.length === 0) {
-    if (!isProcessing && completedFilesInSession > 0) {
+  if (isProcessing) {
+    return;
+  }
+
+  if (uploadQueue.length === 0) {
+    // Only show summary if we've actually processed something in this session.
+    if (completedFilesInSession > 0) {
       await showSummaryNotification(
         successfulUploads,
         duplicateUploads,
         failedUploads,
       );
-      // Reset for next session
-      totalFilesInSession = completedFilesInSession = 0;
+      // Reset for the next batch of uploads.
+      totalFilesInSession = 0;
+      completedFilesInSession = 0; // Reset counter
       successfulUploads = [];
       duplicateUploads = [];
       failedUploads = [];
@@ -401,9 +434,12 @@ const processQueue = async () => {
       e,
     );
   } finally {
+    // This block runs whether the upload succeeded or failed, ensuring the queue always progresses.
     completedFilesInSession++;
     isProcessing = false;
-    processQueue(); // Always process the next file
+    // We call processQueue without await to let the current execution finish
+    // and start the next item on a new stack.
+    processQueue();
   }
 };
 

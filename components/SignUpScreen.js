@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { getAuth } from '@react-native-firebase/auth';
 
-const SignUpScreen = ({ navigation }) => {
+const SignUpScreen = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -70,7 +70,9 @@ const SignUpScreen = ({ navigation }) => {
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.linkButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            /* Navigation is handled by App.tsx state change */
+          }}
         >
           <Text style={styles.linkText}>Already have an account? Sign In</Text>
         </TouchableOpacity>
