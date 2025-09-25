@@ -42,22 +42,9 @@ async function showUploadNotification(totalFiles) {
   });
 }
 
-function formatEta(seconds) {
-  if (seconds < 0 || !isFinite(seconds)) {
-    return 'Calculating...';
-  }
-  if (seconds < 60) {
-    return `${Math.round(seconds)}s remaining`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
-  return `${minutes}m ${remainingSeconds}s remaining`;
-}
-
 async function updateUploadProgress(
   currentFilename,
   progress,
-  etaSeconds,
   totalFiles,
   completedFiles,
 ) {
@@ -82,51 +69,6 @@ async function updateUploadProgress(
   });
 }
 
-async function showSummaryNotification(
-  successfulUploads,
-  duplicateUploads,
-  failedUploads,
-) {
-  let title = 'Upload Complete';
-  const bodyLines = [];
-
-  if (successfulUploads.length > 0) {
-    bodyLines.push(`• Uploaded: ${successfulUploads.length} file(s)`);
-  }
-  if (duplicateUploads.length > 0) {
-    bodyLines.push(`• Duplicates: ${duplicateUploads.length} file(s)`);
-  }
-  if (failedUploads.length > 0) {
-    bodyLines.push(`• Failed: ${failedUploads.length} file(s)`);
-    title = 'Upload Finished with Errors';
-  }
-
-  const summaryBody =
-    bodyLines.length > 0
-      ? bodyLines.join('\n')
-      : 'All files processed successfully.';
-
-  // Create a separate, high-importance channel for the final summary
-  const summaryChannelId = await notifee.createChannel({
-    id: 'upload-summary-channel',
-    name: 'Upload Summaries',
-    importance: AndroidImportance.HIGH, // HIGH importance makes it pop up
-  });
-
-  await notifee.displayNotification({
-    id: NOTIFICATION_ID,
-    title: title,
-    body: summaryBody,
-    android: {
-      channelId: summaryChannelId,
-      // Use BigText style to show the full summary
-      style: { type: notifee.AndroidStyle.BIGTEXT, text: summaryBody },
-      ongoing: false,
-      autoCancel: true,
-    },
-  });
-}
-
 const getAuthToken = async () => {
   try {
     const authInstance = getAuth();
@@ -134,27 +76,6 @@ const getAuthToken = async () => {
   } catch (error) {
     console.error('Failed to get auth token', error);
     return null;
-  }
-};
-
-/**
- * Deletes a local file from the device's gallery after it has been uploaded.
- * @param {string} fileUri The URI of the local file to delete.
- */
-const deleteLocalFile = async fileUri => {
-  try {
-    // The CameraRoll.deletePhotos method is the correct way to delete media
-    // from the device's gallery, as it handles both the file deletion and
-    // updating the Android MediaStore or iOS Photos library.
-    await CameraRoll.deletePhotos([fileUri]);
-    console.log(`[UploadManager] Successfully deleted local file: ${fileUri}`);
-  } catch (error) {
-    console.error(
-      `[UploadManager] Failed to delete local file ${fileUri}:`,
-      error,
-    );
-    // We log the error but don't re-throw. The upload was successful,
-    // so failing to delete the local file shouldn't be treated as a critical failure.
   }
 };
 
@@ -244,24 +165,12 @@ const uploadSingleFile = async (
       ])
       .uploadProgress((written, total) => {
         const progress = (written / total) * 100;
-        updateUploadProgress(
-          filename,
-          progress,
-          null,
-          totalFiles,
-          completedFiles,
-        );
+        updateUploadProgress(filename, progress, totalFiles, completedFiles);
       });
 
     if (resp.info().status >= 200 && resp.info().status < 300) {
       // Explicitly update progress to 100% for this file to ensure it doesn't get "stuck".
-      await updateUploadProgress(
-        filename,
-        100,
-        null,
-        totalFiles,
-        completedFiles,
-      );
+      await updateUploadProgress(filename, 100, totalFiles, completedFiles);
       const result = resp.json();
       if (result.status === 'processing') {
         successfulUploads.push({ filename, fileUri });
@@ -350,7 +259,6 @@ const uploadFileInChunks = async (
       await updateUploadProgress(
         filename,
         progress,
-        null,
         totalFiles,
         completedFiles,
       );
@@ -380,7 +288,7 @@ const uploadFileInChunks = async (
     }
 
     // Explicitly update progress to 100% for the chunked file upon successful finalization.
-    await updateUploadProgress(filename, 100, null, totalFiles, completedFiles);
+    await updateUploadProgress(filename, 100, totalFiles, completedFiles);
     const result = await completeResponse.json();
     if (result.status === 'processing') {
       successfulUploads.push({ filename, fileUri });
@@ -401,55 +309,59 @@ const processQueue = async () => {
     return;
   }
 
+  // If the queue is empty, it's time to finalize the session.
   if (uploadQueue.length === 0) {
-    if (completedFilesInSession > 0) {
-      // --- New Deletion Logic ---
-      const filesToDelete = [...successfulUploads, ...duplicateUploads];
-      if (filesToDelete.length > 0) {
-        Alert.alert(
-          'Delete Uploaded Files?',
-          `Successfully processed ${filesToDelete.length} file(s). Would you like to delete them from your device to save space?`,
-          [
-            {
-              text: 'Keep Files',
-              style: 'cancel',
-              onPress: () =>
-                console.log('[UploadManager] User chose to keep local files.'),
-            },
-            {
-              text: 'Delete',
-              style: 'destructive',
-              onPress: async () => {
-                console.log(
-                  `[UploadManager] User confirmed deletion of ${filesToDelete.length} files.`,
-                );
-                const urisToDelete = filesToDelete.map(f => f.fileUri);
-                try {
-                  await CameraRoll.deletePhotos(urisToDelete);
-                  Alert.alert('Success', 'Local files have been deleted.');
-                } catch (error) {
-                  console.error('Failed to delete one or more files:', error);
-                  Alert.alert('Error', 'Could not delete local files.');
-                }
-              },
-            },
-          ],
-        );
-      }
+    // Use a timeout to delay the final actions. This allows the user to see
+    // the "100%" completion status on the notification for a few seconds.
+    setTimeout(async () => {
+      if (completedFilesInSession > 0) {
+        // 1. Stop the foreground service.
+        await notifee.stopForegroundService();
 
-      // Show the final summary notification regardless of deletion choice
-      await showSummaryNotification(
-        successfulUploads.map(f => f.filename),
-        duplicateUploads.map(f => f.filename),
-        failedUploads, // This is already just filenames
-      );
-      // Reset for the next batch of uploads.
-      totalFilesInSession = 0;
-      completedFilesInSession = 0; // Reset counter
-      successfulUploads = [];
-      duplicateUploads = [];
-      failedUploads = [];
-    }
+        // 2. Now, ask the user if they want to delete the local files.
+        const filesToDelete = [...successfulUploads, ...duplicateUploads];
+        if (filesToDelete.length > 0) {
+          Alert.alert(
+            'Delete Uploaded Files?',
+            `Successfully processed ${filesToDelete.length} file(s). Would you like to delete them from your device to save space?`,
+            [
+              {
+                text: 'Keep Files',
+                style: 'cancel',
+                onPress: () =>
+                  console.log(
+                    '[UploadManager] User chose to keep local files.',
+                  ),
+              },
+              {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: async () => {
+                  console.log(
+                    `[UploadManager] User confirmed deletion of ${filesToDelete.length} files.`,
+                  );
+                  const urisToDelete = filesToDelete.map(f => f.fileUri);
+                  try {
+                    await CameraRoll.deletePhotos(urisToDelete);
+                    Alert.alert('Success', 'Local files have been deleted.');
+                  } catch (error) {
+                    console.error('Failed to delete one or more files:', error);
+                    Alert.alert('Error', 'Could not delete local files.');
+                  }
+                },
+              },
+            ],
+          );
+        }
+
+        // 3. Finally, reset the session state for the next batch.
+        totalFilesInSession = 0;
+        completedFilesInSession = 0; // Reset counter
+        successfulUploads = [];
+        duplicateUploads = [];
+        failedUploads = [];
+      }
+    }, 2500); // 2.5-second delay before hiding the notification and showing the alert.
     return;
   }
 
@@ -469,9 +381,10 @@ const processQueue = async () => {
     // This block runs whether the upload succeeded or failed, ensuring the queue always progresses.
     completedFilesInSession++;
     isProcessing = false;
-    // We call processQueue without await to let the current execution finish
-    // and start the next item on a new stack.
-    processQueue();
+    // Use setTimeout to schedule the next queue processing. This allows the
+    // current function stack to unwind completely, preventing race conditions
+    // and ensuring the final summary call is executed correctly.
+    setTimeout(processQueue, 0);
   }
 };
 

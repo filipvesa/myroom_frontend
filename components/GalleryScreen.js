@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   SectionList,
   TouchableOpacity,
   Image,
@@ -210,7 +209,6 @@ const MemoizedCloudMediaItem = React.memo(
     );
   },
 );
-
 const groupMediaByDateAndRow = (mediaList, dateExtractor) => {
   if (!mediaList || mediaList.length === 0) return [];
 
@@ -229,6 +227,16 @@ const groupMediaByDateAndRow = (mediaList, dateExtractor) => {
     return acc;
   }, {});
 
+  // --- PERFORMANCE FIX: Group items into rows of 3 for SectionList virtualization ---
+  for (const dateKey in groupedByDate) {
+    const items = groupedByDate[dateKey];
+    const rows = [];
+    for (let i = 0; i < items.length; i += 3) {
+      rows.push(items.slice(i, i + 3));
+    }
+    groupedByDate[dateKey] = rows;
+  }
+
   return Object.keys(groupedByDate)
     .sort((a, b) => new Date(b) - new Date(a))
     .map(dateKey => ({
@@ -238,7 +246,7 @@ const groupMediaByDateAndRow = (mediaList, dateExtractor) => {
         month: 'long',
         day: 'numeric',
       }),
-      data: [groupedByDate[dateKey]], // This is the key: wrap all items for a date into a single array element for renderItem
+      data: groupedByDate[dateKey], // Now data is an array of rows
     }));
 };
 
@@ -252,7 +260,6 @@ const GalleryScreen = ({ navigation }) => {
   const [groupedLocalMedia, setGroupedLocalMedia] = useState([]);
   const [groupedCloudMedia, setGroupedCloudMedia] = useState([]);
   const [selectedItems, setSelectedItems] = useState(new Map());
-  const [flatCloudMedia, setFlatCloudMedia] = useState([]);
 
   // State for cloud media pagination
   const [loadingCloud, setLoadingCloud] = useState(false); // For initial load
@@ -266,6 +273,31 @@ const GalleryScreen = ({ navigation }) => {
       // for when we navigate back from a screen that allowed rotation.
       Orientation.lockToPortrait(); //
     }, []),
+  );
+
+  // This effect is crucial for ensuring the cloud media is up-to-date.
+  // It runs every time the screen comes into focus.
+  useFocusEffect(
+    React.useCallback(() => {
+      let refreshTimeout;
+
+      if (activeTab === 'storage') {
+        // When the storage tab is focused, we need to fetch the latest data.
+        // We introduce a small, controlled delay before fetching. This is the
+        // key to solving the race condition where the app requests the media
+        // list before the backend has finished processing the last upload.
+        refreshTimeout = setTimeout(() => {
+          // Reset all cloud media state to ensure a clean refresh from page 1.
+          setCloudMedia([]);
+          setGroupedCloudMedia([]);
+          setCloudPage(1);
+          setHasMoreCloud(true);
+          loadCloudMedia(1); // Fetch the first page of data.
+        }, 1500); // 1.5-second delay
+      }
+
+      return () => clearTimeout(refreshTimeout); // Cleanup on unfocus
+    }, [activeTab]), // Re-run if the active tab changes while the screen is focused
   );
 
   async function hasAndroidPermission() {
@@ -333,7 +365,7 @@ const GalleryScreen = ({ navigation }) => {
     }
 
     try {
-      const PAGE_LIMIT = 30;
+      const PAGE_LIMIT = 20;
       const token = await getAuthToken();
       // Critical Check: If there's no token, the user is not authenticated.
       if (!token) {
@@ -358,12 +390,29 @@ const GalleryScreen = ({ navigation }) => {
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      const serverMediaList = await response.json();
+
+      // --- FIX: Handle both object and array responses from the server ---
+      const responseData = await response.json();
+      let serverMediaList;
+      let pagination;
+
+      if (Array.isArray(responseData)) {
+        // Handle the case where the server returns an empty array directly
+        serverMediaList = responseData;
+        pagination = { currentPage: page, totalPages: page }; // Assume this is the last page
+      } else {
+        // Handle the expected object structure
+        serverMediaList = responseData.media || [];
+        pagination = responseData.pagination || {
+          currentPage: page,
+          totalPages: page,
+        };
+      }
 
       // --- DEBUGGING: Log the raw data from the server ---
       console.log(
         '[DEBUG] Raw data from server:',
-        JSON.stringify(serverMediaList, null, 2),
+        JSON.stringify(responseData, null, 2),
       );
 
       // 2. Define cache properties
@@ -447,7 +496,9 @@ const GalleryScreen = ({ navigation }) => {
       // Update state
       setCloudMedia(newCloudMedia);
       setCloudPage(page);
-      setHasMoreCloud(processedMedia.length === PAGE_LIMIT);
+
+      // --- FIX: Use pagination data from the server ---
+      setHasMoreCloud(pagination.currentPage < pagination.totalPages);
 
       // Group the successfully processed media by date *after* filtering
       // Group the successfully processed media by date
@@ -456,26 +507,6 @@ const GalleryScreen = ({ navigation }) => {
         item => item.createdAt,
       );
       setGroupedCloudMedia(grouped);
-
-      // Create a flat list for performant rendering with FlatList
-      const flatData = [];
-      grouped.forEach(section => {
-        if (section.data[0] && section.data[0].length > 0) {
-          flatData.push({
-            id: `header-${section.title}`,
-            type: 'header',
-            title: section.title,
-          });
-          section.data[0].forEach(photo => {
-            flatData.push({
-              ...photo,
-              id: `photo-${photo._id}`,
-              type: 'photo',
-            });
-          });
-        }
-      });
-      setFlatCloudMedia(flatData);
     } catch (error) {
       console.error('Failed to fetch cloud media:', error);
       Alert.alert(
@@ -512,7 +543,6 @@ const GalleryScreen = ({ navigation }) => {
       );
     }
   };
-
   const handleCloudItemInteraction = item => {
     if (isSelectionMode) {
       // Toggle selection
@@ -735,18 +765,13 @@ const GalleryScreen = ({ navigation }) => {
 
   useEffect(() => {
     if (activeTab === 'local') {
+      // Only load local media on the first visit to the tab
       if (media.length === 0) {
         loadMedia();
       }
-    } else if (activeTab === 'storage') {
-      // Always refresh cloud media when the storage tab is active
-      // Reset and load the first page
-      setCloudMedia([]);
-      setGroupedCloudMedia([]);
-      setCloudPage(1);
-      setHasMoreCloud(true);
-      loadCloudMedia(1);
     }
+    // The logic for loading 'storage' media has been moved to useFocusEffect
+    // to ensure it refreshes every time the user visits the screen.
   }, [activeTab]);
 
   const loadMoreMedia = () => {
@@ -816,12 +841,7 @@ const GalleryScreen = ({ navigation }) => {
     addFilesToUploadQueue(filesToUpload);
 
     // Immediately reset the UI. The UploadManager will show a notification.
-    // Invalidate cloud media to force a refresh on next visit
-    setCloudMedia([]);
-    setGroupedCloudMedia([]);
-    setCloudPage(1);
-    setHasMoreCloud(true);
-    cancelSelection();
+    cancelSelection(); // Just cancel the selection, the focus effect will handle the refresh.
   };
 
   return (
@@ -854,11 +874,11 @@ const GalleryScreen = ({ navigation }) => {
           renderSectionHeader={({ section: { title } }) => (
             <Text style={styles.sectionHeader}>{title}</Text>
           )}
-          renderItem={({ item: sectionItems }) => {
-            // 'sectionItems' is an array of all photos for this section
+          renderItem={({ item: rowItems }) => {
+            // 'rowItems' is now an array of up to 3 photos for a single row
             return (
               <View style={styles.sectionContainer}>
-                {sectionItems.map(item => (
+                {rowItems.map(item => (
                   <MemoizedLocalMediaItem
                     key={item.node.image.uri}
                     item={item}
@@ -881,35 +901,39 @@ const GalleryScreen = ({ navigation }) => {
         />
       )}
       {activeTab === 'storage' && (
-        <FlatList
-          data={flatCloudMedia}
+        <SectionList
+          sections={groupedCloudMedia}
           contentContainerStyle={styles.listContentContainer}
-          keyExtractor={item => item.id}
-          numColumns={3}
-          renderItem={({ item }) => {
-            if (item.type === 'header') {
-              return (
-                <View style={styles.fullWidthContainer}>
-                  <Text style={styles.sectionHeader}>{item.title}</Text>
-                </View>
-              );
+          keyExtractor={(sectionItems, index) => {
+            if (Array.isArray(sectionItems) && sectionItems.length > 0) {
+              return sectionItems[0]._id; // Use first item's ID as key
             }
-
-            // It's a photo item
-            const isVideo = item.mediaType.startsWith('video');
-            const isPhoto = item.mediaType === 'photo';
-            const isSelected = selectedItems.has(item._id);
+            return `section-${index}`; // Fallback
+          }}
+          renderSectionHeader={({ section: { title } }) => (
+            <Text style={styles.sectionHeader}>{title}</Text>
+          )}
+          renderItem={({ item: rowItems }) => {
+            // 'rowItems' is now an array of up to 3 photos for a single row
             return (
-              <MemoizedCloudMediaItem
-                item={item}
-                handleCloudItemInteraction={handleCloudItemInteraction}
-                onLongPress={handleCloudItemLongPress}
-                isSelected={isSelected}
-              />
+              <View style={styles.sectionContainer}>
+                {rowItems.map(item => (
+                  <MemoizedCloudMediaItem
+                    key={item._id}
+                    item={item}
+                    handleCloudItemInteraction={handleCloudItemInteraction}
+                    onLongPress={handleCloudItemLongPress}
+                    isSelected={selectedItems.has(item._id)}
+                  />
+                ))}
+              </View>
             );
           }}
           onEndReached={loadMoreCloudMedia}
           onEndReachedThreshold={0.5}
+          initialNumToRender={12} // Render a few sections initially
+          maxToRenderPerBatch={6} // Render smaller batches
+          windowSize={11} // Keep a reasonable number of sections in memory
           ListFooterComponent={
             loadingMoreCloud && <ActivityIndicator color="#362419" />
           }
