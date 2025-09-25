@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">vesafilip.eu</domain>
+        <!-- You can add other trusted domains here if needed -->
+    </domain-config>
+    <!--
+      This base-config is important. It inherits the default security policies
+      for all other domains, ensuring your app can still connect to services
+      like Firebase, Google, etc.
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

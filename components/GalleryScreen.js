@@ -266,6 +266,7 @@ const GalleryScreen = ({ navigation }) => {
   const [loadingMoreCloud, setLoadingMoreCloud] = useState(false);
   const [cloudPage, setCloudPage] = useState(1);
   const [hasMoreCloud, setHasMoreCloud] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -294,6 +295,10 @@ const GalleryScreen = ({ navigation }) => {
           setHasMoreCloud(true);
           loadCloudMedia(1); // Fetch the first page of data.
         }, 1500); // 1.5-second delay
+      } else if (activeTab === 'local') {
+        // When the local tab is focused, refresh the media list.
+        // This will catch changes from uploads being deleted or new photos from downloads.
+        loadMedia();
       }
 
       return () => clearTimeout(refreshTimeout); // Cleanup on unfocus
@@ -356,6 +361,20 @@ const GalleryScreen = ({ navigation }) => {
       return null;
     }
   };
+
+  const onRefresh = React.useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      if (activeTab === 'local') {
+        await loadMedia(); // Refresh from the beginning
+      } else if (activeTab === 'storage') {
+        await loadCloudMedia(1); // Refresh from page 1
+      }
+    } catch (error) {
+      console.error('Pull-to-refresh failed:', error);
+    }
+    setIsRefreshing(false);
+  }, [activeTab]);
 
   const loadCloudMedia = async (page = 1) => {
     if (page === 1) {
@@ -716,8 +735,7 @@ const GalleryScreen = ({ navigation }) => {
               );
 
               // Fully refresh the local media list to reflect the changes
-              cancelSelection();
-              loadMedia(); // This will fetch the updated list from the device
+              cancelSelection(); // The useFocusEffect will handle the refresh.
             } catch (error) {
               console.error('Failed to delete local files:', error);
               Alert.alert('Error', 'Could not delete one or more files.');
@@ -728,11 +746,11 @@ const GalleryScreen = ({ navigation }) => {
     );
   };
 
-  const loadMedia = async after => {
+  const loadMedia = async (after, isPullToRefresh = false) => {
     if (Platform.OS === 'android' && !(await hasAndroidPermission())) {
       return;
     }
-    setLoadingMore(true); // Show loading indicator
+    if (!isPullToRefresh) setLoadingMore(true); // Show loading indicator
     CameraRoll.getPhotos({
       first: 42, // Fetch a reasonable page size
       assetType: 'All',
@@ -760,7 +778,9 @@ const GalleryScreen = ({ navigation }) => {
         setGroupedLocalMedia(grouped);
       })
       .catch(err => console.log(err))
-      .finally(() => setLoadingMore(false));
+      .finally(() => {
+        if (!isPullToRefresh) setLoadingMore(false);
+      });
   };
 
   useEffect(() => {
@@ -893,6 +913,8 @@ const GalleryScreen = ({ navigation }) => {
           onEndReached={loadMoreMedia}
           onEndReachedThreshold={0.5}
           initialNumToRender={12} // Render a few sections initially
+          onRefresh={onRefresh}
+          refreshing={isRefreshing}
           maxToRenderPerBatch={6} // Render smaller batches
           windowSize={11} // Keep a reasonable number of sections in memory
           ListFooterComponent={
@@ -931,6 +953,8 @@ const GalleryScreen = ({ navigation }) => {
           }}
           onEndReached={loadMoreCloudMedia}
           onEndReachedThreshold={0.5}
+          onRefresh={onRefresh}
+          refreshing={isRefreshing}
           initialNumToRender={12} // Render a few sections initially
           maxToRenderPerBatch={6} // Render smaller batches
           windowSize={11} // Keep a reasonable number of sections in memory

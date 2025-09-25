@@ -318,40 +318,23 @@ const processQueue = async () => {
         // 1. Stop the foreground service.
         await notifee.stopForegroundService();
 
-        // 2. Now, ask the user if they want to delete the local files.
+        // 2. Now, attempt to delete the local files.
+        // On modern Android, the system will prompt the user for confirmation if required.
         const filesToDelete = [...successfulUploads, ...duplicateUploads];
         if (filesToDelete.length > 0) {
-          Alert.alert(
-            'Delete Uploaded Files?',
-            `Successfully processed ${filesToDelete.length} file(s). Would you like to delete them from your device to save space?`,
-            [
-              {
-                text: 'Keep Files',
-                style: 'cancel',
-                onPress: () =>
-                  console.log(
-                    '[UploadManager] User chose to keep local files.',
-                  ),
-              },
-              {
-                text: 'Delete',
-                style: 'destructive',
-                onPress: async () => {
-                  console.log(
-                    `[UploadManager] User confirmed deletion of ${filesToDelete.length} files.`,
-                  );
-                  const urisToDelete = filesToDelete.map(f => f.fileUri);
-                  try {
-                    await CameraRoll.deletePhotos(urisToDelete);
-                    Alert.alert('Success', 'Local files have been deleted.');
-                  } catch (error) {
-                    console.error('Failed to delete one or more files:', error);
-                    Alert.alert('Error', 'Could not delete local files.');
-                  }
-                },
-              },
-            ],
+          console.log(
+            `[UploadManager] Attempting to delete ${filesToDelete.length} uploaded files.`,
           );
+          const urisToDelete = filesToDelete.map(f => f.fileUri);
+          try {
+            await CameraRoll.deletePhotos(urisToDelete);
+            console.log(
+              '[UploadManager] Deletion successful or handled by user.',
+            );
+          } catch (error) {
+            console.error('Failed to delete one or more files:', error);
+            // We don't show an alert here to avoid interrupting the user.
+          }
         }
 
         // 3. Finally, reset the session state for the next batch.
