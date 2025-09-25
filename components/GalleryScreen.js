@@ -17,7 +17,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Orientation from 'react-native-orientation-locker';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
-import { SharedElement } from 'react-navigation-shared-element';
 import {
   Images,
   Archive,
@@ -155,9 +154,7 @@ const MemoizedLocalMediaItem = React.memo(
         onPress={() => onPress(item)}
         onLongPress={() => onLongPress(item)}
       >
-        <SharedElement id={`photo.${uri}`} style={{ flex: 1 }}>
-          <Image style={styles.image} source={{ uri }} />
-        </SharedElement>
+        <Image style={styles.image} source={{ uri }} />
         {isSelected && (
           <View style={styles.selectionOverlay}>
             <Check color="white" size={24} />
@@ -184,18 +181,16 @@ const MemoizedCloudMediaItem = React.memo(
         onPress={() => handleCloudItemInteraction(item)} // Use the passed handler
         onLongPress={() => onLongPress(item)}
       >
-        <SharedElement id={`photo.${item.urls.original}`} style={{ flex: 1 }}>
-          {item.localThumbnailPath ? (
-            <Image
-              style={styles.image}
-              source={{ uri: item.localThumbnailPath }}
-            />
-          ) : (
-            <View style={styles.thumbnailPlaceholder}>
-              <Play color="rgba(255,255,255,0.7)" size={40} />
-            </View>
-          )}
-        </SharedElement>
+        {item.localThumbnailPath ? (
+          <Image
+            style={styles.image}
+            source={{ uri: item.localThumbnailPath }}
+          />
+        ) : (
+          <View style={styles.thumbnailPlaceholder}>
+            <Play color="rgba(255,255,255,0.7)" size={40} />
+          </View>
+        )}
         {isSelected && (
           <View style={styles.selectionOverlay}>
             <Check color="white" size={24} />

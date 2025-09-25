@@ -11,9 +11,9 @@ let uploadQueue = [];
 let isProcessing = false;
 let totalFilesInSession = 0;
 let completedFilesInSession = 0;
-let successfulUploads = [];
-let duplicateUploads = [];
-let failedUploads = [];
+let successfulUploads = []; // Will store { filename, fileUri }
+let duplicateUploads = []; // Will store { filename, fileUri }
+let failedUploads = []; // Will store filename
 
 const NOTIFICATION_ID = 'upload-progress';
 
@@ -263,13 +263,12 @@ const uploadSingleFile = async (
         completedFiles,
       );
       const result = resp.json();
-      if (result.status === 'uploaded') {
-        successfulUploads.push(filename);
-        await deleteLocalFile(fileUri); // Delete after successful upload
-      } else if (result.status === 'duplicate') {
-        duplicateUploads.push(filename);
-        await deleteLocalFile(fileUri); // Also delete if it's a duplicate
-      } else failedUploads.push(filename);
+      if (result.status === 'processing') {
+        successfulUploads.push({ filename, fileUri });
+      } else if (result.status === 'processing') {
+        // This logic seems to handle duplicates based on your comment.
+        duplicateUploads.push({ filename, fileUri });
+      } else failedUploads.push(filename); // Keep track of failures
     } else {
       throw new Error(`Server returned status ${resp.info().status}`);
     }
@@ -383,13 +382,12 @@ const uploadFileInChunks = async (
     // Explicitly update progress to 100% for the chunked file upon successful finalization.
     await updateUploadProgress(filename, 100, null, totalFiles, completedFiles);
     const result = await completeResponse.json();
-    if (result.status === 'uploaded') {
-      successfulUploads.push(filename);
-      await deleteLocalFile(fileUri); // Delete after successful upload
-    } else if (result.status === 'duplicate') {
-      duplicateUploads.push(filename);
-      await deleteLocalFile(fileUri); // Also delete if it's a duplicate
-    } else failedUploads.push(filename);
+    if (result.status === 'processing') {
+      successfulUploads.push({ filename, fileUri });
+    } else if (result.status === 'processing') {
+      // This logic seems to handle duplicates based on your comment.
+      duplicateUploads.push({ filename, fileUri });
+    } else failedUploads.push(filename); // Keep track of failures
   } catch (error) {
     // Add more context to the error before re-throwing
     throw new Error(
@@ -404,12 +402,46 @@ const processQueue = async () => {
   }
 
   if (uploadQueue.length === 0) {
-    // Only show summary if we've actually processed something in this session.
     if (completedFilesInSession > 0) {
+      // --- New Deletion Logic ---
+      const filesToDelete = [...successfulUploads, ...duplicateUploads];
+      if (filesToDelete.length > 0) {
+        Alert.alert(
+          'Delete Uploaded Files?',
+          `Successfully processed ${filesToDelete.length} file(s). Would you like to delete them from your device to save space?`,
+          [
+            {
+              text: 'Keep Files',
+              style: 'cancel',
+              onPress: () =>
+                console.log('[UploadManager] User chose to keep local files.'),
+            },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: async () => {
+                console.log(
+                  `[UploadManager] User confirmed deletion of ${filesToDelete.length} files.`,
+                );
+                const urisToDelete = filesToDelete.map(f => f.fileUri);
+                try {
+                  await CameraRoll.deletePhotos(urisToDelete);
+                  Alert.alert('Success', 'Local files have been deleted.');
+                } catch (error) {
+                  console.error('Failed to delete one or more files:', error);
+                  Alert.alert('Error', 'Could not delete local files.');
+                }
+              },
+            },
+          ],
+        );
+      }
+
+      // Show the final summary notification regardless of deletion choice
       await showSummaryNotification(
-        successfulUploads,
-        duplicateUploads,
-        failedUploads,
+        successfulUploads.map(f => f.filename),
+        duplicateUploads.map(f => f.filename),
+        failedUploads, // This is already just filenames
       );
       // Reset for the next batch of uploads.
       totalFilesInSession = 0;

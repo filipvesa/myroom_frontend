@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createSharedElementStackNavigator } from 'react-navigation-shared-element';
 import { StackCardStyleInterpolator } from '@react-navigation/stack';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { getAuth, FirebaseAuthTypes } from '@react-native-firebase/auth';
@@ -10,6 +9,7 @@ import GalleryScreen from './components/GalleryScreen';
 import PhotoViewScreen from './components/PhotoViewScreen';
 import VideoPlayerScreen from './components/VideoPlayerScreen';
 import LoginScreen from './components/LoginScreen';
+import { createStackNavigator } from '@react-navigation/stack';
 import SignUpScreen from './components/SignUpScreen';
 import { initializeNotifications } from './services/NotificationManager';
 import { initializeRemoteLogging } from './services/RemoteLog';
@@ -33,7 +33,7 @@ export type RootStackParamList = {
 type StackCardStyleInterpolatorProps =
   Parameters<StackCardStyleInterpolator>[0];
 
-const Stack = createSharedElementStackNavigator<RootStackParamList>();
+const Stack = createStackNavigator<RootStackParamList>();
 
 const AuthStack = () => (
   <Stack.Navigator
@@ -68,11 +68,13 @@ const MainStack = () => (
         cardStyleInterpolator: ({
           current: { progress },
         }: StackCardStyleInterpolatorProps) => ({
-          cardStyle: { opacity: progress },
+          cardStyle: {
+            opacity: progress.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, 1],
+            }),
+          },
         }),
-      }}
-      sharedElements={route => {
-        return [`photo.${route.params.originalUri}`];
       }}
     />
     <Stack.Screen

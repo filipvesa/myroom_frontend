@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Orientation from 'react-native-orientation-locker';
-import { SharedElement } from 'react-navigation-shared-element';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedStyle,
@@ -156,18 +155,13 @@ const PhotoViewScreen = ({ route, navigation }) => {
     >
       <View style={styles.container}>
         <StatusBar hidden />
-        <SharedElement
-          id={`photo.${optimizedUri}`}
-          style={StyleSheet.absoluteFill}
-        >
-          <AnimatedImage
-            source={imageSource}
-            onLoadStart={() => setIsLoading(true)}
-            onLoadEnd={() => setIsLoading(false)}
-            style={[styles.image, animatedStyle]}
-            resizeMode="contain"
-          />
-        </SharedElement>
+        <AnimatedImage
+          source={imageSource}
+          onLoadStart={() => setIsLoading(true)}
+          onLoadEnd={() => setIsLoading(false)}
+          style={[styles.image, animatedStyle]}
+          resizeMode="contain"
+        />
         {isLoading && (
           <ActivityIndicator style={styles.loader} size="large" color="white" />
         )}
