@@ -71,7 +71,9 @@ const MainStack = () => (
           cardStyle: { opacity: progress },
         }),
       }}
-      sharedElements={route => [`photo.${route.params.optimizedUri}`]}
+      sharedElements={route => {
+        return [`photo.${route.params.originalUri}`];
+      }}
     />
     <Stack.Screen
       name="VideoPlayer"
