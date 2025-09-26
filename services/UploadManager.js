@@ -1,10 +1,9 @@
-import { Alert } from 'react-native';
 import notifee, { AndroidImportance } from '@notifee/react-native';
-import { getAuth } from '@react-native-firebase/auth';
 import RNFB from 'react-native-blob-util';
 import RNFS from 'react-native-fs';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import uuid from 'react-native-uuid';
+import { getAuthToken } from '../utils/authUtils';
 
 // --- Global State for the Upload Queue ---
 let uploadQueue = [];
@@ -69,32 +68,39 @@ async function updateUploadProgress(
   });
 }
 
-const getAuthToken = async () => {
-  try {
-    const authInstance = getAuth();
-    return await authInstance.currentUser?.getIdToken();
-  } catch (error) {
-    console.error('Failed to get auth token', error);
-    return null;
-  }
-};
-
 const processFile = async (itemNode, originalIndex) => {
   try {
-    const fileUri = itemNode.image.uri;
+    const originalUri = itemNode.image.uri;
     const filename = itemNode.image.filename || `media_${Date.now()}`;
     const mimeType = itemNode.type;
-    let fileStat;
+    let realFilePath = originalUri; // Default to original, will be updated if it's a content URI
+    let totalSize = 0;
+
     try {
-      fileStat = await RNFS.stat(fileUri);
+      if (originalUri.startsWith('content://')) {
+        // Use RNFB to get both the real path and the size in one go.
+        const statResult = await RNFB.fs.stat(originalUri);
+        if (statResult && statResult.path && statResult.size) {
+          realFilePath = statResult.path;
+          totalSize = Number(statResult.size);
+          console.log(
+            `[UploadManager] Resolved content URI to real path: ${realFilePath}`,
+          );
+        } else {
+          throw new Error(
+            `Failed to resolve content URI to a real file path for: ${originalUri}`,
+          );
+        }
+      } else {
+        // For regular file:// URIs, use RNFS to get the size.
+        const fileStat = await RNFS.stat(realFilePath);
+        totalSize = fileStat.size;
+      }
     } catch (statError) {
-      // This is a critical failure, as we can't read the file.
-      // Re-throw a more informative error.
       throw new Error(
-        `Could not get file stats for URI: ${fileUri}. Original error: ${statError.message}`,
+        `Could not get file stats for URI: ${originalUri}. Original error: ${statError.message}`,
       );
     }
-    const totalSize = fileStat.size;
 
     const CLOUDFLARE_LIMIT = 95 * 1024 * 1024; // 95MB to be safe
 
@@ -109,7 +115,7 @@ const processFile = async (itemNode, originalIndex) => {
     if (totalSize < CLOUDFLARE_LIMIT && !isVideo) {
       // --- Strategy 1: Small file, upload in a single request ---
       await uploadSingleFile(
-        fileUri,
+        originalUri, // Use original URI for RNFB.wrap()
         filename,
         mimeType,
         totalFilesInSession,
@@ -118,7 +124,8 @@ const processFile = async (itemNode, originalIndex) => {
     } else {
       // --- Strategy 2: Large file, upload in chunks ---
       await uploadFileInChunks(
-        fileUri,
+        originalUri, // Pass the original URI for deletion tracking
+        realFilePath, // Use real path for RNFS.read()
         filename,
         mimeType,
         totalSize,
@@ -190,6 +197,7 @@ const uploadSingleFile = async (
 };
 
 const uploadFileInChunks = async (
+  originalUri,
   fileUri,
   filename,
   mimeType,
@@ -291,10 +299,10 @@ const uploadFileInChunks = async (
     await updateUploadProgress(filename, 100, totalFiles, completedFiles);
     const result = await completeResponse.json();
     if (result.status === 'processing') {
-      successfulUploads.push({ filename, fileUri });
+      successfulUploads.push({ filename, fileUri: originalUri });
     } else if (result.status === 'processing') {
       // This logic seems to handle duplicates based on your comment.
-      duplicateUploads.push({ filename, fileUri });
+      duplicateUploads.push({ filename, fileUri: originalUri });
     } else failedUploads.push(filename); // Keep track of failures
   } catch (error) {
     // Add more context to the error before re-throwing
@@ -332,8 +340,16 @@ const processQueue = async () => {
               '[UploadManager] Deletion successful or handled by user.',
             );
           } catch (error) {
-            console.error('Failed to delete one or more files:', error);
-            // We don't show an alert here to avoid interrupting the user.
+            // This error often means the user denied the permission in the system dialog.
+            // We can treat it as a warning instead of a critical failure.
+            if (error.message.includes('Deletion was not completed')) {
+              console.warn(
+                '[UploadManager] File deletion was cancelled by the user.',
+              );
+            } else {
+              // For other unexpected errors, log it as a full error.
+              console.error('Failed to delete one or more files:', error);
+            }
           }
         }
 

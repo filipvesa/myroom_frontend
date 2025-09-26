@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  StyleSheet,
   SectionList,
   TouchableOpacity,
   Image,
@@ -13,242 +12,19 @@ import {
   Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
-import Orientation from 'react-native-orientation-locker';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
-import {
-  Images,
-  Archive,
-  Camera,
-  Wrench,
-  Lock,
-  Play,
-  Check,
-  CloudUpload,
-  File,
-  Trash,
-  Download,
-} from 'lucide-react-native';
-import { addFilesToUploadQueue } from '../services/UploadManager';
-import { getAuth } from '@react-native-firebase/auth';
+import { Play, Check, File } from 'lucide-react-native';
+import { addFilesToUploadQueue } from '../../services/UploadManager';
 import RNFS from 'react-native-fs';
 import RNFB from 'react-native-blob-util';
-
-const Header = ({ navigation, onClean, activeTab }) => (
-  <View style={styles.header}>
-    <TouchableOpacity
-      style={styles.headerButton}
-      onPress={() => navigation.goBack()}
-    >
-      <Text style={styles.headerButtonText}>‹</Text>
-    </TouchableOpacity>
-    <View style={styles.headerTitleContainer}>
-      <Text style={styles.headerTitle}>PHOTO GALLERY</Text>
-      <View style={styles.proBadge}>
-        <Text style={styles.proBadgeText}>PRO</Text>
-      </View>
-    </View>
-    <View style={{ width: 40 }} />
-  </View>
-);
-
-const SelectionHeader = ({
-  onCancel,
-  selectedCount,
-  onUpload,
-  onDelete,
-  onDownload,
-  onLocalDelete,
-  activeTab,
-}) => (
-  <View style={styles.header}>
-    <TouchableOpacity style={styles.headerButton} onPress={onCancel}>
-      {/* Using a multiplication sign for a cleaner 'X' */}
-      <Text style={styles.headerButtonText}>✕</Text>
-    </TouchableOpacity>
-    <View style={styles.headerTitleContainer}>
-      <Text style={styles.headerTitle}>{selectedCount} selected</Text>
-    </View>
-    <View style={styles.selectionActions}>
-      {selectedCount > 0 && activeTab === 'local' && (
-        <>
-          <TouchableOpacity style={styles.headerButton} onPress={onLocalDelete}>
-            <Trash color="black" size={28} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.headerButton} onPress={onUpload}>
-            <CloudUpload color="black" size={28} />
-          </TouchableOpacity>
-        </>
-      )}
-      {selectedCount > 0 && activeTab === 'storage' && (
-        <>
-          <TouchableOpacity style={styles.headerButton} onPress={onDownload}>
-            <Download color="black" size={28} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.headerButton} onPress={onDelete}>
-            <Trash color="black" size={28} />
-          </TouchableOpacity>
-        </>
-      )}
-    </View>
-  </View>
-);
-
-const BottomNavigation = ({ activeTab, onTabPress }) => {
-  const tabs = [
-    { id: 'local', icon: Images, label: 'Local' },
-    { id: 'storage', icon: Archive, label: 'Storage' },
-    { id: 'camera', icon: Camera, label: 'Camera', isMain: true },
-    { id: 'tools', icon: Wrench, label: 'Tools' },
-    { id: 'lock', icon: Lock, label: 'Lock' },
-  ];
-
-  return (
-    <View style={styles.bottomNav}>
-      {tabs.map(({ id, icon: Icon, label, isMain }) => {
-        const isActive = activeTab === id;
-        return (
-          <TouchableOpacity
-            key={id}
-            onPress={() => onTabPress(id)}
-            style={[
-              styles.tab,
-              isMain && styles.mainTab,
-              isMain && {
-                backgroundColor: isActive ? 'white' : 'rgba(255,255,255,0.8)',
-              },
-            ]}
-          >
-            <Icon
-              size={isMain ? 24 : 20}
-              color={isMain ? 'black' : isActive ? 'white' : 'gray'}
-            />
-            {!isMain && (
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: isActive ? 'white' : 'gray' },
-                ]}
-              >
-                {label}
-              </Text>
-            )}
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-};
-
-// Memoizing the individual grid items is a key performance optimization.
-// It prevents them from re-rendering unnecessarily as the list scrolls.
-const MemoizedLocalMediaItem = React.memo(
-  ({ item, onLongPress, onPress, isSelected }) => {
-    const isVideo = item.node.type.startsWith('video');
-    const { uri } = item.node.image;
-
-    return (
-      <TouchableOpacity
-        style={styles.imageTouchable}
-        onPress={() => onPress(item)}
-        onLongPress={() => onLongPress(item)}
-      >
-        <Image style={styles.image} source={{ uri }} />
-        {isSelected && (
-          <View style={styles.selectionOverlay}>
-            <Check color="white" size={24} />
-          </View>
-        )}
-        {isVideo && (
-          <View style={styles.videoIconContainer}>
-            <Play color="white" size={24} />
-          </View>
-        )}
-      </TouchableOpacity>
-    );
-  },
-);
-
-const MemoizedCloudMediaItem = React.memo(
-  ({ item, onLongPress, isSelected, handleCloudItemInteraction }) => {
-    const isVideo = item.mediaType.startsWith('video');
-    const isPhoto = item.mediaType === 'photo';
-
-    return (
-      <TouchableOpacity
-        style={styles.imageTouchable}
-        onPress={() => handleCloudItemInteraction(item)} // Use the passed handler
-        onLongPress={() => onLongPress(item)}
-      >
-        {item.localThumbnailPath ? (
-          <Image
-            style={styles.image}
-            source={{ uri: item.localThumbnailPath }}
-          />
-        ) : (
-          <View style={styles.thumbnailPlaceholder}>
-            <Play color="rgba(255,255,255,0.7)" size={40} />
-          </View>
-        )}
-        {isSelected && (
-          <View style={styles.selectionOverlay}>
-            <Check color="white" size={24} />
-          </View>
-        )}
-        {isVideo && (
-          <View style={styles.videoIconContainer}>
-            <Play color="white" size={24} />
-          </View>
-        )}
-        {!isPhoto && !isVideo && (
-          <View style={styles.videoIconContainer}>
-            <File color="white" size={24} />
-          </View>
-        )}
-      </TouchableOpacity>
-    );
-  },
-);
-const groupMediaByDateAndRow = (mediaList, dateExtractor) => {
-  if (!mediaList || mediaList.length === 0) return [];
-
-  const groupedByDate = mediaList.reduce((acc, item) => {
-    const date = dateExtractor(item);
-    if (!date) return acc;
-
-    const d = new Date(date);
-    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
-      2,
-      '0',
-    )}-${String(d.getDate()).padStart(2, '0')}`;
-
-    if (!acc[dateKey]) acc[dateKey] = [];
-    acc[dateKey].push(item);
-    return acc;
-  }, {});
-
-  // --- PERFORMANCE FIX: Group items into rows of 3 for SectionList virtualization ---
-  for (const dateKey in groupedByDate) {
-    const items = groupedByDate[dateKey];
-    const rows = [];
-    for (let i = 0; i < items.length; i += 3) {
-      rows.push(items.slice(i, i + 3));
-    }
-    groupedByDate[dateKey] = rows;
-  }
-
-  return Object.keys(groupedByDate)
-    .sort((a, b) => new Date(b) - new Date(a))
-    .map(dateKey => ({
-      title: new Date(dateKey).toLocaleDateString('en-US', {
-        timeZone: 'UTC',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      }),
-      data: groupedByDate[dateKey], // Now data is an array of rows
-    }));
-};
+import Header from './Header';
+import SelectionHeader from './SelectionHeader';
+import BottomNavigation from './BottomNavigation';
+import { MemoizedLocalMediaItem } from './LocalMediaItem';
+import { MemoizedCloudMediaItem } from './CloudMediaItem';
+import { getAuthToken } from '../../utils/authUtils';
+import { galleryStyles as styles } from '../../styles/galleryStyles';
+import { groupMediaByDateAndRow } from '../../utils/galleryUtils';
 
 const GalleryScreen = ({ navigation }) => {
   const [activeTab, setActiveTab] = useState('local');
@@ -260,6 +36,7 @@ const GalleryScreen = ({ navigation }) => {
   const [groupedLocalMedia, setGroupedLocalMedia] = useState([]);
   const [groupedCloudMedia, setGroupedCloudMedia] = useState([]);
   const [selectedItems, setSelectedItems] = useState(new Map());
+  const [selectedSections, setSelectedSections] = useState(new Set());
 
   // State for cloud media pagination
   const [loadingCloud, setLoadingCloud] = useState(false); // For initial load
@@ -267,43 +44,6 @@ const GalleryScreen = ({ navigation }) => {
   const [cloudPage, setCloudPage] = useState(1);
   const [hasMoreCloud, setHasMoreCloud] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      // Lock to portrait when the gallery is visible. This is important
-      // for when we navigate back from a screen that allowed rotation.
-      Orientation.lockToPortrait(); //
-    }, []),
-  );
-
-  // This effect is crucial for ensuring the cloud media is up-to-date.
-  // It runs every time the screen comes into focus.
-  useFocusEffect(
-    React.useCallback(() => {
-      let refreshTimeout;
-
-      if (activeTab === 'storage') {
-        // When the storage tab is focused, we need to fetch the latest data.
-        // We introduce a small, controlled delay before fetching. This is the
-        // key to solving the race condition where the app requests the media
-        // list before the backend has finished processing the last upload.
-        refreshTimeout = setTimeout(() => {
-          // Reset all cloud media state to ensure a clean refresh from page 1.
-          setCloudMedia([]);
-          setGroupedCloudMedia([]);
-          setCloudPage(1);
-          setHasMoreCloud(true);
-          loadCloudMedia(1); // Fetch the first page of data.
-        }, 1500); // 1.5-second delay
-      } else if (activeTab === 'local') {
-        // When the local tab is focused, refresh the media list.
-        // This will catch changes from uploads being deleted or new photos from downloads.
-        loadMedia();
-      }
-
-      return () => clearTimeout(refreshTimeout); // Cleanup on unfocus
-    }, [activeTab]), // Re-run if the active tab changes while the screen is focused
-  );
 
   async function hasAndroidPermission() {
     if (Platform.OS !== 'android') {
@@ -350,17 +90,6 @@ const GalleryScreen = ({ navigation }) => {
 
     return hasPermission;
   }
-
-  // In a real app, you would retrieve this from secure storage after a login process.
-  const getAuthToken = async () => {
-    try {
-      const authInstance = getAuth();
-      return await authInstance.currentUser?.getIdToken();
-    } catch (error) {
-      console.error('Failed to get auth token', error);
-      return null;
-    }
-  };
 
   const onRefresh = React.useCallback(async () => {
     setIsRefreshing(true);
@@ -587,6 +316,67 @@ const GalleryScreen = ({ navigation }) => {
     setSelectedItems(new Map([[item._id, item]]));
   };
 
+  const handleSectionLongPress = section => {
+    setIsSelectionMode(true);
+
+    const newSelectedItems = new Map(selectedItems);
+    const newSelectedSections = new Set(selectedSections);
+    const sectionTitle = section.title;
+    const isSectionCurrentlySelected = newSelectedSections.has(sectionTitle);
+
+    // Flatten the rows to get all items in the section
+    const allItemsInSection = section.data.flat(); // .flat() is perfect here
+
+    // Define how to get a unique ID and the item data for each tab
+    const getItemId =
+      activeTab === 'local' ? item => item.node.image.uri : item => item._id;
+    const getItemData =
+      activeTab === 'local' ? item => item.node : item => item;
+
+    if (isSectionCurrentlySelected) {
+      // If the section is already selected, deselect it and all its items.
+      newSelectedSections.delete(sectionTitle);
+      allItemsInSection.forEach(item => {
+        newSelectedItems.delete(getItemId(item));
+      });
+    } else {
+      // If the section is not selected, select it and all its items.
+      newSelectedSections.add(sectionTitle);
+      allItemsInSection.forEach(item => {
+        newSelectedItems.set(getItemId(item), getItemData(item));
+      });
+    }
+
+    setSelectedItems(newSelectedItems);
+    setSelectedSections(newSelectedSections);
+
+    // If deselecting the last selected items, exit selection mode
+    if (newSelectedItems.size === 0) {
+      setIsSelectionMode(false);
+    }
+  };
+
+  const renderSectionHeader = ({ section }) => {
+    const isSectionSelected = selectedSections.has(section.title);
+    return (
+      <TouchableOpacity onLongPress={() => handleSectionLongPress(section)}>
+        <View style={styles.sectionHeaderContainer}>
+          <Text style={styles.sectionHeader}>{section.title}</Text>
+          {isSelectionMode && (
+            <View
+              style={[
+                styles.selectionCircle,
+                isSectionSelected && styles.selectionCircleSelected,
+              ]}
+            >
+              <Check color="white" size={14} />
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   const handleDelete = () => {
     if (selectedItems.size === 0) return;
 
@@ -789,9 +579,12 @@ const GalleryScreen = ({ navigation }) => {
       if (media.length === 0) {
         loadMedia();
       }
+    } else if (activeTab === 'storage') {
+      // Only load cloud media on the first visit to the tab
+      if (cloudMedia.length === 0) {
+        loadCloudMedia(1);
+      }
     }
-    // The logic for loading 'storage' media has been moved to useFocusEffect
-    // to ensure it refreshes every time the user visits the screen.
   }, [activeTab]);
 
   const loadMoreMedia = () => {
@@ -849,6 +642,7 @@ const GalleryScreen = ({ navigation }) => {
   const cancelSelection = () => {
     setIsSelectionMode(false);
     setSelectedItems(new Map());
+    setSelectedSections(new Set());
   };
 
   const handleUpload = () => {
@@ -891,9 +685,7 @@ const GalleryScreen = ({ navigation }) => {
             }
             return `section-${index}`; // Fallback key
           }}
-          renderSectionHeader={({ section: { title } }) => (
-            <Text style={styles.sectionHeader}>{title}</Text>
-          )}
+          renderSectionHeader={renderSectionHeader}
           renderItem={({ item: rowItems }) => {
             // 'rowItems' is now an array of up to 3 photos for a single row
             return (
@@ -932,9 +724,7 @@ const GalleryScreen = ({ navigation }) => {
             }
             return `section-${index}`; // Fallback
           }}
-          renderSectionHeader={({ section: { title } }) => (
-            <Text style={styles.sectionHeader}>{title}</Text>
-          )}
+          renderSectionHeader={renderSectionHeader}
           renderItem={({ item: rowItems }) => {
             // 'rowItems' is now an array of up to 3 photos for a single row
             return (
@@ -974,167 +764,5 @@ const GalleryScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#E8E0D4',
-  },
-  // Header
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#E8E0D4',
-  },
-  headerButton: {
-    padding: 8,
-  },
-  headerButtonText: {
-    fontSize: 28,
-    color: 'black',
-  },
-  headerTitleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  headerTitle: {
-    color: 'black',
-    letterSpacing: 1,
-    fontSize: 18,
-    fontWeight: '500',
-  },
-  proBadge: {
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 999,
-  },
-  proBadgeText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  selectionActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  placeholderContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  placeholderText: {
-    fontSize: 18,
-    color: '#362419',
-    fontWeight: '500',
-    opacity: 0.7,
-  },
-  fullWidthContainer: {
-    width: '100%',
-  },
-  imageTouchable: {
-    width: '33.333%',
-    aspectRatio: 1,
-    padding: 2,
-  },
-  sectionContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  sectionHeader: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#362419',
-    backgroundColor: '#E8E0D4',
-    paddingHorizontal: 16, // Keep horizontal padding
-  },
-  imageTouchable_legacy_flatlist: {
-    flex: 1 / 3,
-    aspectRatio: 1,
-    // This padding creates the visual gap between images.
-    // A value of 2 means a 4px gap between items.
-    padding: 2,
-  },
-  image: {
-    flex: 1,
-    borderRadius: 8,
-    margin: 8,
-
-    // The image should fill its container. The gap is handled by the parent's padding.
-    resizeMode: 'cover',
-  },
-  thumbnailPlaceholder: {
-    flex: 1,
-    borderRadius: 8,
-    margin: 8,
-    backgroundColor: '#333',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  listContentContainer: {
-    // No padding needed here, as the item's padding handles the gaps.
-  },
-  videoIconContainer: {
-    position: 'absolute',
-    // Increased from 8 to 16 to move it inside the image's margin
-    bottom: 16,
-    right: 16,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 15,
-    width: 30,
-    height: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  selectionOverlay: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 30,
-    height: 30,
-    backgroundColor: 'rgba(0, 122, 255, 0.7)',
-    borderRadius: 15,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // Bottom Navigation
-  bottomNav: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(0,0,0,0.9)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingTop: 12,
-    paddingBottom: 20, // For home indicator
-    paddingHorizontal: 16,
-  },
-  tab: {
-    alignItems: 'center',
-    gap: 4,
-    padding: 8,
-    minWidth: 60,
-  },
-  mainTab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
-  },
-  tabLabel: {
-    fontSize: 12,
-  },
-});
 
 export default GalleryScreen;

@@ -5,7 +5,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { getAuth, FirebaseAuthTypes } from '@react-native-firebase/auth';
 import SplashScreen from './components/SplashScreen';
 import MainScreen from './components/MainScreen';
-import GalleryScreen from './components/GalleryScreen';
+import GalleryScreen from './components/GalleryScreen/GalleryScreen';
 import PhotoViewScreen from './components/PhotoViewScreen';
 import VideoPlayerScreen from './components/VideoPlayerScreen';
 import LoginScreen from './components/LoginScreen';

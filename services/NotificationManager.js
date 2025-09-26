@@ -1,14 +1,11 @@
 import messaging from '@react-native-firebase/messaging';
-import { Alert, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import notifee, { AndroidImportance } from '@notifee/react-native';
-
-let fcmToken = null;
 
 /**
  * Requests permission from the user to send push notifications.
  */
 async function requestUserPermission() {
-  // For remote push notifications via FCM
   const authStatus = await messaging().requestPermission();
   const enabled =
     authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
@@ -34,7 +31,6 @@ async function getFcmToken() {
     const token = await messaging().getToken();
     if (token) {
       console.log('FCM Token:', token);
-      fcmToken = token;
     } else {
       console.log('Failed to get FCM token.');
     }
@@ -48,7 +44,7 @@ async function getFcmToken() {
  */
 function setupNotificationListeners() {
   // When a notification is received while the app is in the foreground
-  const unsubscribeForeground = messaging().onMessage(async remoteMessage => {
+  messaging().onMessage(async remoteMessage => {
     console.log('FCM message received in foreground:', remoteMessage);
 
     // Create a channel (required for Android)
@@ -92,8 +88,4 @@ function setupNotificationListeners() {
 export async function initializeNotifications() {
   await requestUserPermission();
   setupNotificationListeners();
-}
-
-export function getCurrentFcmToken() {
-  return fcmToken;
 }

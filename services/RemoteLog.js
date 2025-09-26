@@ -1,4 +1,4 @@
-import { getAuth } from '@react-native-firebase/auth';
+import { getAuthToken } from '../utils/authUtils';
 
 const LOG_SERVER_URL = 'https://vesafilip.eu/api/logs/client';
 const BATCH_SIZE = 50; // Send logs in batches of 50
@@ -19,8 +19,7 @@ async function sendLogBatch() {
   logQueue = []; // Clear the queue immediately
 
   try {
-    const authInstance = getAuth();
-    const token = await authInstance.currentUser?.getIdToken();
+    const token = await getAuthToken();
 
     const headers = {
       'Content-Type': 'application/json',
