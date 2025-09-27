@@ -22,6 +22,9 @@ import SelectionHeader from './SelectionHeader';
 import BottomNavigation from './BottomNavigation';
 import { MemoizedLocalMediaItem } from './LocalMediaItem';
 import { MemoizedCloudMediaItem } from './CloudMediaItem';
+import InfoModal from './InfoModal';
+import AddToAlbumModal from './AddToAlbumModal';
+import AlbumStrip from './AlbumStrip';
 import { getAuthToken } from '../../utils/authUtils';
 import { galleryStyles as styles } from '../../styles/galleryStyles';
 import { groupMediaByDateAndRow } from '../../utils/galleryUtils';
@@ -37,6 +40,12 @@ const GalleryScreen = ({ navigation }) => {
   const [groupedCloudMedia, setGroupedCloudMedia] = useState([]);
   const [selectedItems, setSelectedItems] = useState(new Map());
   const [selectedSections, setSelectedSections] = useState(new Set());
+
+  const [infoModalVisible, setInfoModalVisible] = useState(false);
+  const [selectedFileInfo, setSelectedFileInfo] = useState(null);
+  const [isAddToAlbumModalVisible, setIsAddToAlbumModalVisible] =
+    useState(false);
+  const [selectedAlbumId, setSelectedAlbumId] = useState(null);
 
   // State for cloud media pagination
   const [loadingCloud, setLoadingCloud] = useState(false); // For initial load
@@ -97,15 +106,15 @@ const GalleryScreen = ({ navigation }) => {
       if (activeTab === 'local') {
         await loadMedia(); // Refresh from the beginning
       } else if (activeTab === 'storage') {
-        await loadCloudMedia(1); // Refresh from page 1
+        await loadCloudMedia(1, selectedAlbumId); // Re-load the currently selected album
       }
     } catch (error) {
       console.error('Pull-to-refresh failed:', error);
     }
     setIsRefreshing(false);
-  }, [activeTab]);
+  }, [activeTab, selectedAlbumId]);
 
-  const loadCloudMedia = async (page = 1) => {
+  const loadCloudMedia = async (page = 1, albumId = selectedAlbumId) => {
     if (page === 1) {
       setLoadingCloud(true);
     } else {
@@ -129,12 +138,13 @@ const GalleryScreen = ({ navigation }) => {
       }
 
       // 1. Fetch the latest list of media from the server
-      const response = await fetch(
-        `https://vesafilip.eu/api/media/?page=${page}&limit=${PAGE_LIMIT}`,
-        {
-          headers,
-        },
-      );
+      const baseUrl = 'https://vesafilip.eu/api';
+      const url = albumId
+        ? `${baseUrl}/albums/${albumId}/media?page=${page}&limit=${PAGE_LIMIT}`
+        : `${baseUrl}/media/?page=${page}&limit=${PAGE_LIMIT}`;
+      const response = await fetch(url, {
+        headers,
+      });
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -310,73 +320,6 @@ const GalleryScreen = ({ navigation }) => {
     }
   };
 
-  const handleCloudItemLongPress = item => {
-    if (isSelectionMode) return;
-    setIsSelectionMode(true);
-    setSelectedItems(new Map([[item._id, item]]));
-  };
-
-  const handleSectionLongPress = section => {
-    setIsSelectionMode(true);
-
-    const newSelectedItems = new Map(selectedItems);
-    const newSelectedSections = new Set(selectedSections);
-    const sectionTitle = section.title;
-    const isSectionCurrentlySelected = newSelectedSections.has(sectionTitle);
-
-    // Flatten the rows to get all items in the section
-    const allItemsInSection = section.data.flat(); // .flat() is perfect here
-
-    // Define how to get a unique ID and the item data for each tab
-    const getItemId =
-      activeTab === 'local' ? item => item.node.image.uri : item => item._id;
-    const getItemData =
-      activeTab === 'local' ? item => item.node : item => item;
-
-    if (isSectionCurrentlySelected) {
-      // If the section is already selected, deselect it and all its items.
-      newSelectedSections.delete(sectionTitle);
-      allItemsInSection.forEach(item => {
-        newSelectedItems.delete(getItemId(item));
-      });
-    } else {
-      // If the section is not selected, select it and all its items.
-      newSelectedSections.add(sectionTitle);
-      allItemsInSection.forEach(item => {
-        newSelectedItems.set(getItemId(item), getItemData(item));
-      });
-    }
-
-    setSelectedItems(newSelectedItems);
-    setSelectedSections(newSelectedSections);
-
-    // If deselecting the last selected items, exit selection mode
-    if (newSelectedItems.size === 0) {
-      setIsSelectionMode(false);
-    }
-  };
-
-  const renderSectionHeader = ({ section }) => {
-    const isSectionSelected = selectedSections.has(section.title);
-    return (
-      <TouchableOpacity onLongPress={() => handleSectionLongPress(section)}>
-        <View style={styles.sectionHeaderContainer}>
-          <Text style={styles.sectionHeader}>{section.title}</Text>
-          {isSelectionMode && (
-            <View
-              style={[
-                styles.selectionCircle,
-                isSectionSelected && styles.selectionCircleSelected,
-              ]}
-            >
-              <Check color="white" size={14} />
-            </View>
-          )}
-        </View>
-      </TouchableOpacity>
-    );
-  };
-
   const handleDelete = () => {
     if (selectedItems.size === 0) return;
 
@@ -536,6 +479,171 @@ const GalleryScreen = ({ navigation }) => {
     );
   };
 
+  const handleAlbumSelect = albumId => {
+    // If the same album is tapped again, do nothing.
+    if (albumId === selectedAlbumId) return;
+
+    setSelectedAlbumId(albumId);
+    // Reset media and pagination to load fresh data for the selected album
+    setCloudMedia([]);
+    setGroupedCloudMedia([]);
+    loadCloudMedia(1, albumId);
+  };
+
+  const handleShowItemInfo = async item => {
+    let fileInfo = {};
+
+    try {
+      if (activeTab === 'local') {
+        const node = item.node;
+        let realPath = node.image.uri;
+        let size = 0;
+        if (realPath.startsWith('content://')) {
+          const stat = await RNFB.fs.stat(realPath);
+          realPath = stat.path;
+          size = stat.size;
+        } else {
+          const stat = await RNFS.stat(realPath);
+          size = stat.size;
+        }
+        fileInfo = {
+          filename: node.image.filename,
+          mimeType: node.type,
+          size: size,
+          createdAt: node.timestamp * 1000,
+          path: realPath,
+        };
+      } else {
+        // For cloud media
+        let extension = 'file';
+        if (item.mimeType) {
+          extension = item.mimeType.split('/')[1] || 'bin';
+        } else if (item.mediaType === 'photo') {
+          extension = 'jpg';
+        } else if (item.mediaType === 'video') {
+          extension = 'mp4';
+        }
+        const constructedFilename = `${item._id}.${extension}`;
+
+        fileInfo = {
+          filename: constructedFilename,
+          mimeType: item.mimeType,
+          size: item.size,
+          createdAt: item.createdAt,
+          path: 'Cloud Storage',
+        };
+      }
+      setSelectedFileInfo(fileInfo);
+      setInfoModalVisible(true);
+    } catch (error) {
+      console.error('Failed to get file info:', error);
+      Alert.alert('Error', 'Could not retrieve file information.');
+    }
+  };
+
+  const handleSectionLongPress = section => {
+    if (!isSelectionMode) setIsSelectionMode(true);
+
+    const newSelectedItems = new Map(selectedItems);
+    const newSelectedSections = new Set(selectedSections);
+    const sectionTitle = section.title;
+    const isSectionCurrentlySelected = newSelectedSections.has(sectionTitle);
+
+    const allItemsInSection = section.data.flat();
+
+    const getItemId =
+      activeTab === 'local' ? item => item.node.image.uri : item => item._id;
+    const getItemData =
+      activeTab === 'local' ? item => item.node : item => item;
+
+    if (isSectionCurrentlySelected) {
+      newSelectedSections.delete(sectionTitle);
+      allItemsInSection.forEach(item => {
+        newSelectedItems.delete(getItemId(item));
+      });
+    } else {
+      newSelectedSections.add(sectionTitle);
+      allItemsInSection.forEach(item => {
+        newSelectedItems.set(getItemId(item), getItemData(item));
+      });
+    }
+
+    setSelectedItems(newSelectedItems);
+    setSelectedSections(newSelectedSections);
+
+    if (newSelectedItems.size === 0) {
+      setIsSelectionMode(false);
+    }
+  };
+
+  const renderSectionHeader = ({ section }) => {
+    const isSectionSelected = selectedSections.has(section.title);
+    return (
+      <TouchableOpacity onLongPress={() => handleSectionLongPress(section)}>
+        <View style={styles.sectionHeaderContainer}>
+          <Text style={styles.sectionHeader}>{section.title}</Text>
+          {isSelectionMode && (
+            <View
+              style={[
+                styles.selectionCircle,
+                isSectionSelected && styles.selectionCircleSelected,
+              ]}
+            >
+              <Check color="white" size={14} />
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const handleAlbumDelete = albumId => {
+    if (!albumId) return; // Can't delete "All Photos"
+
+    Alert.alert(
+      'Delete Album',
+      'Are you sure you want to delete this album? The photos inside will not be deleted.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const token = await getAuthToken();
+              const response = await fetch(
+                `https://vesafilip.eu/api/albums/${albumId}`,
+                {
+                  method: 'DELETE',
+                  headers: { Authorization: `Bearer ${token}` },
+                },
+              );
+              if (!response.ok) {
+                // --- FIX: Improve error message with details from the server ---
+                let errorMessage = `HTTP Error: ${response.status}`;
+                try {
+                  const errorBody = await response.json();
+                  errorMessage += ` - ${
+                    errorBody.message || 'Unknown server error'
+                  }`;
+                } catch (e) {
+                  // Could not parse error body
+                }
+                throw new Error(errorMessage);
+              }
+              // --- FIX: Reset to "All Photos" view after deletion ---
+              setSelectedAlbumId(null);
+              await loadCloudMedia(1, null); // Explicitly refresh the "All Photos" view
+            } catch (error) {
+              console.error('Failed to delete album:', error);
+              Alert.alert('Error', 'Could not delete the album.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const loadMedia = async (after, isPullToRefresh = false) => {
     if (Platform.OS === 'android' && !(await hasAndroidPermission())) {
       return;
@@ -600,11 +708,14 @@ const GalleryScreen = ({ navigation }) => {
   };
 
   const handleLongPress = item => {
-    // Don't do anything if already in selection mode on long press
-    if (isSelectionMode) return;
+    if (isSelectionMode) return; // Don't do anything if already in selection mode
 
-    setIsSelectionMode(true);
-    setSelectedItems(new Map([[item.node.image.uri, item.node]]));
+    setIsSelectionMode(true); // Enter selection mode
+    if (activeTab === 'local') {
+      setSelectedItems(new Map([[item.node.image.uri, item.node]]));
+    } else {
+      setSelectedItems(new Map([[item._id, item]]));
+    }
   };
 
   const handlePress = item => {
@@ -658,6 +769,45 @@ const GalleryScreen = ({ navigation }) => {
     cancelSelection(); // Just cancel the selection, the focus effect will handle the refresh.
   };
 
+  const handleOpenAddToAlbumModal = () => {
+    setIsAddToAlbumModalVisible(true);
+  };
+
+  const handleConfirmAddToAlbum = albumId => {
+    // This function is called when an album is selected in the modal.
+    const mediaIds = Array.from(selectedItems.keys());
+    if (mediaIds.length === 0) {
+      Alert.alert('No items selected.');
+      return;
+    }
+
+    const addItemsToAlbum = async () => {
+      try {
+        const token = await getAuthToken();
+        const response = await fetch(
+          `https://vesafilip.eu/api/albums/${albumId}/media`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ mediaIds }),
+          },
+        );
+        if (!response.ok) throw new Error('Failed to add items to album.');
+        Alert.alert('Success', 'Items added to album!');
+        setIsAddToAlbumModalVisible(false);
+        cancelSelection();
+      } catch (error) {
+        console.error(error);
+        Alert.alert('Error', 'Could not add items to the album.');
+      }
+    };
+
+    addItemsToAlbum();
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       {isSelectionMode ? (
@@ -667,6 +817,7 @@ const GalleryScreen = ({ navigation }) => {
           onUpload={handleUpload}
           onDelete={handleDelete}
           onDownload={handleDownload}
+          onAddToAlbum={handleOpenAddToAlbumModal}
           onLocalDelete={handleLocalDelete}
           activeTab={activeTab}
         />
@@ -694,8 +845,9 @@ const GalleryScreen = ({ navigation }) => {
                   <MemoizedLocalMediaItem
                     key={item.node.image.uri}
                     item={item}
-                    onPress={handlePress}
-                    onLongPress={handleLongPress}
+                    onPress={() => handlePress(item)}
+                    onLongPress={() => handleLongPress(item)}
+                    onPressInfo={handleShowItemInfo}
                     isSelected={selectedItems.has(item.node.image.uri)}
                   />
                 ))}
@@ -717,6 +869,13 @@ const GalleryScreen = ({ navigation }) => {
       {activeTab === 'storage' && (
         <SectionList
           sections={groupedCloudMedia}
+          ListHeaderComponent={
+            <AlbumStrip
+              onAlbumSelect={handleAlbumSelect}
+              onAlbumLongPress={handleAlbumDelete}
+              selectedAlbumId={selectedAlbumId}
+            />
+          }
           contentContainerStyle={styles.listContentContainer}
           keyExtractor={(sectionItems, index) => {
             if (Array.isArray(sectionItems) && sectionItems.length > 0) {
@@ -734,7 +893,8 @@ const GalleryScreen = ({ navigation }) => {
                     key={item._id}
                     item={item}
                     handleCloudItemInteraction={handleCloudItemInteraction}
-                    onLongPress={handleCloudItemLongPress}
+                    onLongPress={() => handleLongPress(item)}
+                    onPressInfo={handleShowItemInfo}
                     isSelected={selectedItems.has(item._id)}
                   />
                 ))}
@@ -742,12 +902,12 @@ const GalleryScreen = ({ navigation }) => {
             );
           }}
           onEndReached={loadMoreCloudMedia}
-          onEndReachedThreshold={0.5}
+          onEndReachedThreshold={0.2}
           onRefresh={onRefresh}
           refreshing={isRefreshing}
-          initialNumToRender={12} // Render a few sections initially
-          maxToRenderPerBatch={6} // Render smaller batches
-          windowSize={11} // Keep a reasonable number of sections in memory
+          initialNumToRender={6} // Render a few sections initially
+          maxToRenderPerBatch={1} // Render smaller batches
+          windowSize={3} // Keep a reasonable number of sections in memory
           ListFooterComponent={
             loadingMoreCloud && <ActivityIndicator color="#362419" />
           }
@@ -761,6 +921,16 @@ const GalleryScreen = ({ navigation }) => {
       {!isSelectionMode && (
         <BottomNavigation activeTab={activeTab} onTabPress={setActiveTab} />
       )}
+      <InfoModal
+        isVisible={infoModalVisible}
+        onClose={() => setInfoModalVisible(false)}
+        fileInfo={selectedFileInfo}
+      />
+      <AddToAlbumModal
+        isVisible={isAddToAlbumModalVisible}
+        onClose={() => setIsAddToAlbumModalVisible(false)}
+        onConfirm={handleConfirmAddToAlbum}
+      />
     </SafeAreaView>
   );
 };

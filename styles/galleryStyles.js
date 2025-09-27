@@ -115,6 +115,18 @@ export const galleryStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  infoIconContainer: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 15,
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1, // Ensure it's tappable
+  },
   selectionOverlay: {
     position: 'absolute',
     top: 8,

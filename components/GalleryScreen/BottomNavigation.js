@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
-import { Images, Archive, Camera, Wrench, Lock } from 'lucide-react-native';
+import { Images, Archive, Camera, Files, Lock } from 'lucide-react-native';
 import { galleryStyles as styles } from '../../styles/galleryStyles';
 
 const BottomNavigation = ({ activeTab, onTabPress }) => {
@@ -8,7 +8,7 @@ const BottomNavigation = ({ activeTab, onTabPress }) => {
     { id: 'local', icon: Images, label: 'Local' },
     { id: 'storage', icon: Archive, label: 'Storage' },
     { id: 'camera', icon: Camera, label: 'Camera', isMain: true },
-    { id: 'tools', icon: Wrench, label: 'Tools' },
+    { id: 'files', icon: Files, label: 'Files' },
     { id: 'lock', icon: Lock, label: 'Lock' },
   ];
 

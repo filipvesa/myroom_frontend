@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
-import { CloudUpload, Trash, Download } from 'lucide-react-native';
+import { CloudUpload, Trash, Download, FolderPlus } from 'lucide-react-native';
 import { galleryStyles as styles } from '../../styles/galleryStyles';
 
 const SelectionHeader = ({
@@ -9,6 +9,7 @@ const SelectionHeader = ({
   onUpload,
   onDelete,
   onDownload,
+  onAddToAlbum,
   onLocalDelete,
   activeTab,
 }) => (
@@ -32,6 +33,9 @@ const SelectionHeader = ({
       )}
       {selectedCount > 0 && activeTab === 'storage' && (
         <>
+          <TouchableOpacity style={styles.headerButton} onPress={onAddToAlbum}>
+            <FolderPlus color="black" size={28} />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.headerButton} onPress={onDownload}>
             <Download color="black" size={28} />
           </TouchableOpacity>
