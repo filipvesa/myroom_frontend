@@ -10,8 +10,8 @@ let uploadQueue = [];
 let isProcessing = false;
 let totalFilesInSession = 0;
 let completedFilesInSession = 0;
-let successfulUploads = []; // Will store { filename, fileUri }
-let duplicateUploads = []; // Will store { filename, fileUri }
+let successfulUploads = []; // Will store { filename, fileUri, isTemp }
+let duplicateUploads = []; // Will store { filename, fileUri, isTemp }
 let failedUploads = []; // Will store filename
 
 const NOTIFICATION_ID = 'upload-progress';
@@ -116,6 +116,7 @@ const processFile = async (itemNode, originalIndex) => {
       // --- Strategy 1: Small file, upload in a single request ---
       await uploadSingleFile(
         originalUri, // Use original URI for RNFB.wrap()
+        originalUri.startsWith('file://'), // isTemp flag
         filename,
         mimeType,
         totalFilesInSession,
@@ -125,6 +126,7 @@ const processFile = async (itemNode, originalIndex) => {
       // --- Strategy 2: Large file, upload in chunks ---
       await uploadFileInChunks(
         originalUri, // Pass the original URI for deletion tracking
+        originalUri.startsWith('file://'), // isTemp flag
         realFilePath, // Use real path for RNFS.read()
         filename,
         mimeType,
@@ -146,6 +148,7 @@ const processFile = async (itemNode, originalIndex) => {
 
 const uploadSingleFile = async (
   fileUri,
+  isTemp,
   filename,
   mimeType,
   totalFiles,
@@ -180,10 +183,10 @@ const uploadSingleFile = async (
       await updateUploadProgress(filename, 100, totalFiles, completedFiles);
       const result = resp.json();
       if (result.status === 'processing') {
-        successfulUploads.push({ filename, fileUri });
+        successfulUploads.push({ filename, fileUri, isTemp });
       } else if (result.status === 'processing') {
         // This logic seems to handle duplicates based on your comment.
-        duplicateUploads.push({ filename, fileUri });
+        duplicateUploads.push({ filename, fileUri, isTemp });
       } else failedUploads.push(filename); // Keep track of failures
     } else {
       throw new Error(`Server returned status ${resp.info().status}`);
@@ -198,6 +201,7 @@ const uploadSingleFile = async (
 
 const uploadFileInChunks = async (
   originalUri,
+  isTemp,
   fileUri,
   filename,
   mimeType,
@@ -299,10 +303,10 @@ const uploadFileInChunks = async (
     await updateUploadProgress(filename, 100, totalFiles, completedFiles);
     const result = await completeResponse.json();
     if (result.status === 'processing') {
-      successfulUploads.push({ filename, fileUri: originalUri });
+      successfulUploads.push({ filename, fileUri: originalUri, isTemp });
     } else if (result.status === 'processing') {
       // This logic seems to handle duplicates based on your comment.
-      duplicateUploads.push({ filename, fileUri: originalUri });
+      duplicateUploads.push({ filename, fileUri: originalUri, isTemp });
     } else failedUploads.push(filename); // Keep track of failures
   } catch (error) {
     // Add more context to the error before re-throwing
@@ -329,27 +333,41 @@ const processQueue = async () => {
         // 2. Now, attempt to delete the local files.
         // On modern Android, the system will prompt the user for confirmation if required.
         const filesToDelete = [...successfulUploads, ...duplicateUploads];
-        if (filesToDelete.length > 0) {
+        const galleryUrisToDelete = filesToDelete
+          .filter(f => !f.isTemp)
+          .map(f => f.fileUri);
+        const tempFilesToDelete = filesToDelete
+          .filter(f => f.isTemp)
+          .map(f => f.fileUri);
+
+        if (galleryUrisToDelete.length > 0) {
           console.log(
-            `[UploadManager] Attempting to delete ${filesToDelete.length} uploaded files.`,
+            `[UploadManager] Attempting to delete ${galleryUrisToDelete.length} gallery files.`,
           );
-          const urisToDelete = filesToDelete.map(f => f.fileUri);
           try {
-            await CameraRoll.deletePhotos(urisToDelete);
+            await CameraRoll.deletePhotos(galleryUrisToDelete);
             console.log(
               '[UploadManager] Deletion successful or handled by user.',
             );
           } catch (error) {
-            // This error often means the user denied the permission in the system dialog.
-            // We can treat it as a warning instead of a critical failure.
             if (error.message.includes('Deletion was not completed')) {
               console.warn(
                 '[UploadManager] File deletion was cancelled by the user.',
               );
             } else {
-              // For other unexpected errors, log it as a full error.
               console.error('Failed to delete one or more files:', error);
             }
+          }
+        }
+
+        if (tempFilesToDelete.length > 0) {
+          console.log(
+            `[UploadManager] Cleaning up ${tempFilesToDelete.length} temporary files.`,
+          );
+          for (const tempFileUri of tempFilesToDelete) {
+            await RNFS.unlink(tempFileUri.replace('file://', '')).catch(e =>
+              console.warn(`Failed to clean up temp file ${tempFileUri}:`, e),
+            );
           }
         }
 

@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import { Play, Check, File } from 'lucide-react-native';
+import { launchCamera } from 'react-native-image-picker';
 import { addFilesToUploadQueue } from '../../services/UploadManager';
 import RNFS from 'react-native-fs';
 import RNFB from 'react-native-blob-util';
@@ -808,6 +809,38 @@ const GalleryScreen = ({ navigation }) => {
     addItemsToAlbum();
   };
 
+  const handleCameraLaunch = () => {
+    launchCamera(
+      {
+        mediaType: 'photo',
+        saveToPhotos: false, // Does not save a copy to the local gallery
+      },
+      response => {
+        if (response.didCancel) {
+          console.log('User cancelled camera.');
+        } else if (response.errorCode) {
+          console.error('Camera Error: ', response.errorMessage);
+          Alert.alert('Camera Error', 'Could not open the camera.');
+        } else {
+          const asset = response.assets && response.assets[0];
+          if (asset) {
+            // The response gives us an object that looks very similar to a CameraRoll node.
+            // We can adapt it to be used by our UploadManager.
+            const fileToUpload = {
+              image: {
+                uri: asset.uri,
+                filename: asset.fileName,
+              },
+              type: asset.type,
+            };
+            addFilesToUploadQueue([fileToUpload]);
+            Alert.alert('Upload Started', 'Your photo is being uploaded.');
+          }
+        }
+      },
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       {isSelectionMode ? (
@@ -913,13 +946,25 @@ const GalleryScreen = ({ navigation }) => {
           }
         />
       )}
-      {activeTab !== 'local' && activeTab !== 'storage' && (
-        <View style={styles.placeholderContainer}>
-          <Text style={styles.placeholderText}>Coming Soon</Text>
-        </View>
-      )}
+      {activeTab !== 'local' &&
+        activeTab !== 'storage' &&
+        activeTab !== 'camera' && (
+          <View style={styles.placeholderContainer}>
+            <Text style={styles.placeholderText}>Coming Soon</Text>
+          </View>
+        )}
       {!isSelectionMode && (
-        <BottomNavigation activeTab={activeTab} onTabPress={setActiveTab} />
+        <BottomNavigation
+          activeTab={activeTab}
+          onTabPress={tabId => {
+            if (tabId === 'camera') {
+              // The camera is an action, not a tab state. Just launch it.
+              handleCameraLaunch();
+            } else {
+              setActiveTab(tabId);
+            }
+          }}
+        />
       )}
       <InfoModal
         isVisible={infoModalVisible}
