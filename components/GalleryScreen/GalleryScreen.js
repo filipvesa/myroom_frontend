@@ -6,13 +6,15 @@ import {
   TouchableOpacity,
   Image,
   Platform,
-  PermissionsAndroid,
+  FlatList,
   ActivityIndicator,
   Alert,
   Linking,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
+import { PermissionsAndroid } from 'react-native';
 import { Play, Check, File } from 'lucide-react-native';
 import { launchCamera } from 'react-native-image-picker';
 import { addFilesToUploadQueue } from '../../services/UploadManager';
@@ -22,6 +24,7 @@ import Header from './Header';
 import SelectionHeader from './SelectionHeader';
 import BottomNavigation from './BottomNavigation';
 import { MemoizedLocalMediaItem } from './LocalMediaItem';
+import { MemoizedFileGridItem } from './FileGridItem';
 import { MemoizedCloudMediaItem } from './CloudMediaItem';
 import InfoModal from './InfoModal';
 import AddToAlbumModal from './AddToAlbumModal';
@@ -55,39 +58,80 @@ const GalleryScreen = ({ navigation }) => {
   const [hasMoreCloud, setHasMoreCloud] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  async function hasAndroidPermission() {
+  // State for the new Files tab
+  const [otherFiles, setOtherFiles] = useState([]);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+
+  // Re-check permissions when the app becomes active again
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        // If returning to the app on the 'files' tab, re-check permissions and load files
+        if (activeTab === 'files') {
+          console.log(
+            'App has come to the foreground, re-checking file permissions.',
+          );
+          loadOtherFiles();
+        }
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [activeTab]); // Re-subscribe if the active tab changes
+
+  async function hasAndroidPermission(permissionType = 'media') {
     if (Platform.OS !== 'android') {
       return true;
     }
 
-    let hasPermission = false;
-    if (Platform.Version >= 33) {
-      // On Android 13+, we need to check for granular media permissions.
+    // For Android 13 (API 33) and above, use granular media permissions for photos/videos
+    if (permissionType === 'media' && Platform.Version >= 33) {
       const statuses = await PermissionsAndroid.requestMultiple([
         PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
         PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
+        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
       ]);
-      hasPermission =
+      const hasPermission =
         statuses[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] ===
           PermissionsAndroid.RESULTS.GRANTED &&
         statuses[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] ===
           PermissionsAndroid.RESULTS.GRANTED;
-    } else {
-      // On older Android versions (API 28 and below), we need WRITE_EXTERNAL_STORAGE
-      // to be able to delete files from the gallery.
-      const readResult = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-      );
-      // We also need write permission for deletion to work.
-      const writeResult = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
-      );
-      hasPermission =
-        readResult === PermissionsAndroid.RESULTS.GRANTED &&
-        writeResult === PermissionsAndroid.RESULTS.GRANTED;
+      statuses[PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE] ===
+        PermissionsAndroid.RESULTS.GRANTED;
+
+      if (!hasPermission) {
+        Alert.alert(
+          'Permission Required',
+          'MyRoom needs access to your photos and videos to display them.',
+          [{ text: 'OK' }],
+        );
+      }
+      return hasPermission;
     }
 
-    if (!hasPermission) {
+    // For Android 11 (API 30) and above, for non-media files, check for All Files Access
+    if (permissionType === 'files' && Platform.Version >= 30) {
+      const hasPermission = await PermissionsAndroid.check(
+        'android.permission.MANAGE_EXTERNAL_STORAGE',
+      );
+      return hasPermission;
+    }
+
+    // For older Android versions (below 13 for media, below 11 for files), use legacy storage permissions
+    const hasLegacyPermission = await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+    );
+    if (hasLegacyPermission) {
+      return true;
+    }
+
+    const status = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+    );
+    if (status !== PermissionsAndroid.RESULTS.GRANTED) {
       Alert.alert(
         'Permission Required',
         'MyRoom needs access to your photos and videos to display them. Please grant permission in your device settings.',
@@ -96,9 +140,10 @@ const GalleryScreen = ({ navigation }) => {
           { text: 'Open Settings', onPress: () => Linking.openSettings() },
         ],
       );
+      return false;
     }
 
-    return hasPermission;
+    return true;
   }
 
   const onRefresh = React.useCallback(async () => {
@@ -108,6 +153,8 @@ const GalleryScreen = ({ navigation }) => {
         await loadMedia(); // Refresh from the beginning
       } else if (activeTab === 'storage') {
         await loadCloudMedia(1, selectedAlbumId); // Re-load the currently selected album
+      } else if (activeTab === 'files') {
+        await loadOtherFiles(); // Refresh the files list
       }
     } catch (error) {
       console.error('Pull-to-refresh failed:', error);
@@ -444,6 +491,169 @@ const GalleryScreen = ({ navigation }) => {
     );
   };
 
+  const loadOtherFiles = async () => {
+    setLoadingFiles(true);
+
+    // Expanded list of document extensions
+    const documentExtensions = [
+      '.pdf',
+      '.doc',
+      '.docx',
+      '.xls',
+      '.xlsx',
+      '.ppt',
+      '.pptx',
+      '.txt',
+      '.csv', // Added CSV
+      '.rtf', // Added RTF
+      '.odt', // OpenDocument Text
+      '.ods', // OpenDocument Spreadsheet
+      '.odp', // OpenDocument Presentation
+      '.epub', // Added EPUB
+      '.zip',
+      '.rar',
+      '.7z', // Added 7z
+    ];
+
+    // This function will recursively scan a directory for matching files.
+    const recursiveScan = async path => {
+      let results = [];
+      try {
+        if (!(await RNFS.exists(path))) {
+          console.log(`[File Scan] Path does not exist: ${path}`);
+          return [];
+        }
+
+        const items = await RNFS.readDir(path);
+        console.log(`[File Scan] Found ${items.length} items in ${path}`);
+
+        for (const item of items) {
+          console.log(
+            `[File Scan] Processing item: ${item.name} (type: ${
+              item.isDirectory() ? 'directory' : 'file'
+            })`,
+          );
+          if (item.isDirectory()) {
+            results = results.concat(await recursiveScan(item.path)); // Recurse into subdirectories
+          } else if (item.isFile()) {
+            // Ensure it's actually a file
+            const fileNameLower = item.name.toLowerCase();
+            const isDocument = documentExtensions.some(ext =>
+              fileNameLower.endsWith(ext),
+            );
+            if (isDocument) {
+              console.log(`[File Scan] Matched document: ${item.name}`);
+              results.push(item); // Add file if extension matches
+            } else {
+              console.log(
+                `[File Scan] Skipped non-document file: ${item.name}`,
+              );
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`[File Scan] Error accessing directory: ${path}`, error);
+      }
+      return results;
+    };
+
+    try {
+      const downloadFiles = await recursiveScan(RNFS.DownloadDirectoryPath);
+      const documentFiles = await recursiveScan(
+        `${RNFS.ExternalStorageDirectoryPath}/Documents`,
+      );
+
+      const allFoundFiles = [...downloadFiles, ...documentFiles];
+      // De-duplicate in case a file is found in multiple scans (unlikely but safe)
+      const uniqueFiles = allFoundFiles.filter(
+        (v, i, a) => a.findIndex(t => t.path === v.path) === i,
+      );
+
+      console.log(
+        `[File Scan] Found ${uniqueFiles.length} total unique matching documents.`,
+      );
+      setOtherFiles(uniqueFiles);
+    } catch (error) {
+      console.error('Failed to read document directory:', error);
+      Alert.alert(
+        'Error',
+        'Could not read the files directory. Please check permissions.',
+      );
+    } finally {
+      setLoadingFiles(false);
+    }
+  };
+
+  const getMimeType = fileName => {
+    const extension = fileName.split('.').pop().toLowerCase();
+    const mimeTypes = {
+      pdf: 'application/pdf',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xls: 'application/vnd.ms-excel',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ppt: 'application/vnd.ms-powerpoint',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      txt: 'text/plain',
+      csv: 'text/csv',
+      rtf: 'application/rtf',
+      odt: 'application/vnd.oasis.opendocument.text',
+      ods: 'application/vnd.oasis.opendocument.spreadsheet',
+      odp: 'application/vnd.oasis.opendocument.presentation',
+      zip: 'application/zip',
+      rar: 'application/x-rar-compressed',
+      '7z': 'application/x-7z-compressed',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      gif: 'image/gif',
+      mp4: 'video/mp4',
+      mov: 'video/quicktime',
+      avi: 'video/x-msvideo',
+    };
+    return mimeTypes[extension] || 'application/octet-stream'; // Fallback
+  };
+
+  const handleFilePress = async file => {
+    try {
+      const mime = getMimeType(file.name);
+      await RNFB.android.actionViewIntent(file.path, mime);
+    } catch (error) {
+      // Check for the specific error message from the library
+      if (error.message && error.message.includes('No app associated')) {
+        const extension = file.name.split('.').pop().toLowerCase();
+        let suggestion = 'a file viewer';
+        if (extension === 'pdf') {
+          suggestion = 'a PDF reader';
+        } else if (
+          ['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'].includes(extension)
+        ) {
+          suggestion = 'a document editor like Microsoft Office or Google Docs';
+        }
+
+        Alert.alert(
+          'No App Found',
+          `Could not find an app on your device to open this file. You may need to install ${suggestion} from the Play Store.`,
+          [
+            { text: 'OK' },
+            {
+              text: 'Search Play Store',
+              onPress: () =>
+                Linking.openURL(`market://search?q=${extension}%20viewer`),
+            },
+          ],
+        );
+      } else {
+        // Handle other potential errors
+        console.error('Error opening file:', error);
+        Alert.alert(
+          'Error',
+          'An unexpected error occurred while trying to open the file.',
+        );
+      }
+    }
+  };
+
   const handleLocalDelete = () => {
     if (selectedItems.size === 0) return;
 
@@ -646,7 +856,7 @@ const GalleryScreen = ({ navigation }) => {
   };
 
   const loadMedia = async (after, isPullToRefresh = false) => {
-    if (Platform.OS === 'android' && !(await hasAndroidPermission())) {
+    if (Platform.OS === 'android' && !(await hasAndroidPermission('media'))) {
       return;
     }
     if (!isPullToRefresh) setLoadingMore(true); // Show loading indicator
@@ -693,6 +903,9 @@ const GalleryScreen = ({ navigation }) => {
       if (cloudMedia.length === 0) {
         loadCloudMedia(1);
       }
+    } else if (activeTab === 'files') {
+      // Load non-media files when the active tab is 'files'
+      loadOtherFiles();
     }
   }, [activeTab]);
 
@@ -946,9 +1159,31 @@ const GalleryScreen = ({ navigation }) => {
           }
         />
       )}
+      {activeTab === 'files' &&
+        (loadingFiles ? (
+          <ActivityIndicator style={{ flex: 1 }} color="#362419" />
+        ) : otherFiles.length === 0 ? (
+          <View style={styles.centeredContent}>
+            <Text style={styles.placeholderText}>No documents found.</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={otherFiles}
+            keyExtractor={item => item.path}
+            numColumns={3}
+            renderItem={({ item }) => (
+              <MemoizedFileGridItem
+                item={item}
+                onPress={() => handleFilePress(item)}
+              />
+            )}
+            onRefresh={onRefresh}
+            refreshing={isRefreshing}
+          />
+        ))}
       {activeTab !== 'local' &&
         activeTab !== 'storage' &&
-        activeTab !== 'camera' && (
+        activeTab !== 'files' && (
           <View style={styles.placeholderContainer}>
             <Text style={styles.placeholderText}>Coming Soon</Text>
           </View>
@@ -957,7 +1192,9 @@ const GalleryScreen = ({ navigation }) => {
         <BottomNavigation
           activeTab={activeTab}
           onTabPress={tabId => {
-            if (tabId === 'camera') {
+            if (tabId === 'files') {
+              setActiveTab('files');
+            } else if (tabId === 'camera') {
               // The camera is an action, not a tab state. Just launch it.
               handleCameraLaunch();
             } else {

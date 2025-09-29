@@ -9,6 +9,7 @@ import GalleryScreen from './components/GalleryScreen/GalleryScreen';
 import PhotoViewScreen from './components/PhotoViewScreen';
 import VideoPlayerScreen from './components/VideoPlayerScreen';
 import LoginScreen from './components/LoginScreen';
+import NotesScreen from './components/NotesScreen';
 import { createStackNavigator } from '@react-navigation/stack';
 import SignUpScreen from './components/SignUpScreen';
 import { initializeNotifications } from './services/NotificationManager';
@@ -27,6 +28,7 @@ export type RootStackParamList = {
   VideoPlayer: { videoUri: string };
   Login: undefined;
   SignUp: undefined;
+  NotesScreen: undefined;
 };
 
 // This is a robust way to get the props type for the interpolator.
@@ -80,6 +82,11 @@ const MainStack = () => (
     <Stack.Screen
       name="VideoPlayer"
       component={VideoPlayerScreen}
+      options={{ headerShown: false }}
+    />
+    <Stack.Screen
+      name="NotesScreen"
+      component={NotesScreen}
       options={{ headerShown: false }}
     />
   </Stack.Navigator>

@@ -93,8 +93,7 @@ const MainScreen = ({ navigation }) => {
                 : 'rgba(54, 36, 25, 0.1)',
             },
           ]}
-          // To navigate, you would use: onPress={() => navigation.navigate('NotesScreen')}
-          onPress={() => alert('Tablet Shelf Tapped!')}
+          onPress={() => navigation.navigate('NotesScreen')}
         >
           {({ pressed }) => (
             <Text
